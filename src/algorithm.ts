@@ -980,7 +980,10 @@ export function generateTimetable(
 
             // Critical penalty if period leaves a gap (not filling from period 1 onwards)
             // Strictly prevents non-contiguous slots: e.g. tiết 1 có, tiết 2 trống, tiết 3 có
-            const gapPenalty = (period - lowestEmpty) * 5000000;
+            if (period > lowestEmpty && !relaxConstraints) {
+              continue;
+            }
+            const gapPenalty = (period - lowestEmpty) * 20000000;
 
             // Morning-first priority: Heavily penalize scheduling into afternoon while morning slots are still open
             let afternoonPrematurePenalty = 0;
@@ -1499,7 +1502,7 @@ export function compactTimetable(
     for (const cls of classes) {
       for (let dM = 0; dM < config.days; dM++) {
         const limitsM = getDailyPeriodsForClass(cls, dM, config);
-        const morningCapM = Math.min(morningLessons, limitsM.morning);
+        const morningCapM = limitsM.morning > 0 ? Math.min(morningLessons, limitsM.morning) : morningLessons;
 
         for (let pM = 0; pM < morningCapM; pM++) {
           if (isSchoolOff(dM, pM)) continue;
@@ -1507,9 +1510,8 @@ export function compactTimetable(
 
           // (dM, pM) is an empty morning slot! Find an afternoon lesson of this class to move up
           for (let dA = 0; dA < config.days && !classSchedule[cls.id]?.[dM]?.[pM]; dA++) {
-            const limitsA = getDailyPeriodsForClass(cls, dA, config);
             const aftStart = morningLessons;
-            const aftEnd = morningLessons + limitsA.afternoon;
+            const aftEnd = totalPeriods;
 
             for (let pA = aftStart; pA < aftEnd; pA++) {
               const subId = classSchedule[cls.id]?.[dA]?.[pA];
@@ -1539,20 +1541,21 @@ export function compactTimetable(
   }
 
   // PHASE 2: Strict Zero-Gap Contiguity Compactor (Ensure no mid-session holes, push empty periods to end)
-  for (let packIter = 0; packIter < 10; packIter++) {
+  for (let packIter = 0; packIter < 15; packIter++) {
     let changedAny = false;
 
     for (const cls of classes) {
       for (let d = 0; d < config.days; d++) {
         for (const isMorning of [true, false]) {
-          const limits = getDailyPeriodsForClass(cls, d, config);
           const startP = isMorning ? 0 : morningLessons;
-          const sessionCap = isMorning ? Math.min(morningLessons, limits.morning) : Math.min(afternoonLessons, limits.afternoon);
-          const endP = startP + sessionCap;
+          const sessionSpan = isMorning ? morningLessons : afternoonLessons;
+          if (sessionSpan <= 0) continue;
+          const endP = startP + sessionSpan;
 
+          // All slots belonging to this class on day d in this session
           const sessionSlots = slots.filter(s => s.classId === cls.id && s.day === d && s.period >= startP && s.period < endP);
           const K = sessionSlots.length;
-          if (K === 0 || K >= sessionCap) continue;
+          if (K === 0 || K >= sessionSpan) continue;
 
           // Check if already contiguous: periods startP, startP + 1, ..., startP + K - 1 must all be occupied
           let isContiguous = true;
@@ -1564,7 +1567,7 @@ export function compactTimetable(
           }
           if (isContiguous) continue;
 
-          // 1. Direct greedy shift
+          // 1. Direct greedy shift: move any slot sitting >= startP + K into an empty slot < startP + K
           for (let p = startP; p < startP + K; p++) {
             if (!classSchedule[cls.id]?.[d]?.[p]) {
               for (let pNext = startP + K; pNext < endP; pNext++) {
@@ -1592,9 +1595,9 @@ export function compactTimetable(
           }
           if (isContiguous) continue;
 
-          // 2. Permutation search for K lessons in session
+          // 2. Permutation search for K lessons in session (up to K <= 6)
           const curSlots = slots.filter(s => s.classId === cls.id && s.day === d && s.period >= startP && s.period < endP);
-          if (curSlots.length === K && K <= 5) {
+          if (curSlots.length === K && K <= 6) {
             const targetPeriods = Array.from({ length: K }, (_, i) => startP + i);
             const perms = getPermutations(curSlots);
 
@@ -1646,7 +1649,45 @@ export function compactTimetable(
           }
           if (isContiguous) continue;
 
-          // 3. Inter-Day Swaps for persistent gaps
+          // 3. Same-teacher cross-class swap (Teacher T teaches other class at pEmpty, can swap periods)
+          for (let pEmpty = startP; pEmpty < startP + K; pEmpty++) {
+            if (!classSchedule[cls.id]?.[d]?.[pEmpty]) {
+              for (let pTail = startP + K; pTail < endP; pTail++) {
+                const sTail = slots.find(s => s.classId === cls.id && s.day === d && s.period === pTail);
+                if (!sTail || sTail.isFixed || sTail.isExam) continue;
+                const tId = sTail.teacherId;
+                if (tId === 'none') continue;
+
+                // Find if teacher T is teaching another class at (d, pEmpty)
+                const otherSlot = slots.find(os => os.teacherId === tId && os.day === d && os.period === pEmpty && os.classId !== cls.id);
+                if (otherSlot && !otherSlot.isFixed && !otherSlot.isExam) {
+                  const otherClsId = otherSlot.classId;
+                  // Can otherCls take pTail?
+                  const otherClsFreeAtTail = !classSchedule[otherClsId]?.[d]?.[pTail] && !isSchoolOff(d, pTail);
+                  if (otherClsFreeAtTail) {
+                    // Swap classes for teacher T between pEmpty and pTail
+                    moveSlot(otherSlot, d, pTail);
+                    moveSlot(sTail, d, pEmpty);
+                    changedAny = true;
+                    break;
+                  }
+                }
+              }
+              if (classSchedule[cls.id]?.[d]?.[pEmpty]) break;
+            }
+          }
+
+          // Re-check
+          isContiguous = true;
+          for (let p = startP; p < startP + K; p++) {
+            if (!classSchedule[cls.id]?.[d]?.[p]) {
+              isContiguous = false;
+              break;
+            }
+          }
+          if (isContiguous) continue;
+
+          // 4. Inter-Day Swaps for persistent gaps
           for (let p = startP; p < startP + K; p++) {
             if (!classSchedule[cls.id]?.[d]?.[p]) {
               for (let pTail = startP + K; pTail < endP; pTail++) {
@@ -1673,6 +1714,40 @@ export function compactTimetable(
                   if (classSchedule[cls.id]?.[d]?.[p]) break;
                 }
                 if (classSchedule[cls.id]?.[d]?.[p]) break;
+              }
+            }
+          }
+
+          // Re-check
+          isContiguous = true;
+          for (let p = startP; p < startP + K; p++) {
+            if (!classSchedule[cls.id]?.[d]?.[p]) {
+              isContiguous = false;
+              break;
+            }
+          }
+          if (isContiguous) continue;
+
+          // 5. Relocate unfixable gapped slot to another day's session that can receive it contiguously
+          for (let pTail = startP + K; pTail < endP; pTail++) {
+            const sTail = slots.find(s => s.classId === cls.id && s.day === d && s.period === pTail);
+            if (!sTail || sTail.isFixed || sTail.isExam) continue;
+
+            for (let d2 = 0; d2 < config.days; d2++) {
+              if (d2 === d) continue;
+              const d2Slots = slots.filter(s => s.classId === cls.id && s.day === d2 && s.period >= startP && s.period < endP);
+              const K2 = d2Slots.length;
+              if (K2 < sessionSpan) {
+                const targetP2 = startP + K2;
+                if (!classSchedule[cls.id]?.[d2]?.[targetP2] && !isSchoolOff(d2, targetP2)) {
+                  if (sTail.teacherId === 'none' || !isTeacherBusyForClass(sTail.teacherId, d2, targetP2, cls.id, sTail.subjectId)) {
+                    if (!classSubjectDays[cls.id]?.[sTail.subjectId]?.has(d2)) {
+                      moveSlot(sTail, d2, targetP2);
+                      changedAny = true;
+                      break;
+                    }
+                  }
+                }
               }
             }
           }
