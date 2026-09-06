@@ -206,7 +206,7 @@ export default function App() {
     return 1;
   });
 
-  const [weeklyTimetables, setWeeklyTimetables] = useState<Record<number, { timetable: TimetableSlot[], unassigned: any[] }>>(() => {
+  const [weeklyTimetables, setWeeklyTimetables] = useState<Record<number, { timetable: TimetableSlot[], unassigned: any[], weekType?: 'all' | 'odd' | 'even' | 'custom' }>>(() => {
     try {
       const saved = localStorage.getItem('timetableData');
       if (saved) {
@@ -706,7 +706,13 @@ export default function App() {
   };
 
   const handleGenerate = (customConfig?: Config) => {
-    const activeConfig = customConfig || config;
+    const weekType = weeklyTimetables[currentWeek]?.weekType || (currentWeek % 2 === 1 ? 'odd' : 'even');
+    const baseConfig = customConfig || config;
+    const activeConfig: Config = {
+      ...baseConfig,
+      currentWeek,
+      currentWeekType: weekType
+    };
     const { slots, unassigned, autoAdjustedConfig } = generateTimetable(classes, subjects, teachers, activeConfig);
     const finalConfig = autoAdjustedConfig || activeConfig;
 
@@ -754,7 +760,13 @@ export default function App() {
   const handleCompactTimetable = () => {
     const currentSlots = weeklyTimetables[currentWeek]?.timetable || [];
     if (currentSlots.length === 0) return;
-    const compacted = compactTimetable(currentSlots, classes, subjects, teachers, config);
+    const weekType = weeklyTimetables[currentWeek]?.weekType || (currentWeek % 2 === 1 ? 'odd' : 'even');
+    const activeConfig: Config = {
+      ...config,
+      currentWeek,
+      currentWeekType: weekType
+    };
+    const compacted = compactTimetable(currentSlots, classes, subjects, teachers, activeConfig);
     const updatedWeekly = {
       ...weeklyTimetables,
       [currentWeek]: {
@@ -764,7 +776,7 @@ export default function App() {
     };
     setWeeklyTimetables(updatedWeekly);
 
-    const dataToSave = { classes, subjects, teachers, config, weeklyTimetables: updatedWeekly, currentWeek };
+    const dataToSave = { classes, subjects, teachers, config: activeConfig, weeklyTimetables: updatedWeekly, currentWeek };
     localStorage.setItem('timetableData', JSON.stringify(dataToSave));
     try {
       localStorage.setItem('timetableData_backup', JSON.stringify(dataToSave));
@@ -1070,7 +1082,11 @@ export default function App() {
                 classes={classes} 
                 subjects={subjects} 
                 teachers={teachers} 
-                config={config} 
+                config={{
+                  ...config,
+                  currentWeek,
+                  currentWeekType: weeklyTimetables[currentWeek]?.weekType || (currentWeek % 2 === 1 ? 'odd' : 'even')
+                }} 
                 onAutoBalanceAndRegenerate={handleAutoBalanceAndGenerate}
                 onCompactTimetable={handleCompactTimetable}
               />

@@ -75,6 +75,7 @@ export interface Config {
   appSubtitle: string;
   schoolYear: string;
   currentTerm?: 'I' | 'II';
+  currentWeek?: number;
   currentWeekType?: 'all' | 'odd' | 'even' | 'custom';
   executionDate: string;
   exams: ExamConfig[];
