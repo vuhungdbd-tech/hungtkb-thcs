@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { Class, Subject, Teacher, Config, TimetableSlot } from '../types';
-import { LessonToSchedule, getDailyPeriodsForClass, getIntegratedGroupKey } from '../algorithm';
+import { LessonToSchedule, getDailyPeriodsForClass, getIntegratedGroupKey, isValidTeacher, getClassSubjectPlans } from '../algorithm';
 import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
 import { 
@@ -16,7 +16,8 @@ import {
   Search,
   FileSpreadsheet,
   Sparkles,
-  Wand2
+  Wand2,
+  CheckCircle2
 } from 'lucide-react';
 
 interface Props {
@@ -41,6 +42,8 @@ export default function ResultTab({ timetable, unassigned, classes, subjects, te
     return saved || classes[0]?.id || '';
   });
 
+  const [notificationMsg, setNotificationMsg] = useState<string | null>(null);
+
   const setViewMode = (mode: 'class' | 'teacher' | 'master_morning' | 'master_afternoon') => {
     setViewModeState(mode);
     localStorage.setItem('resultViewMode', mode);
@@ -61,39 +64,72 @@ export default function ResultTab({ timetable, unassigned, classes, subjects, te
   const validUnassigned = useMemo(() => {
     if (!unassigned || unassigned.length === 0) return [];
 
+    // Precalculate class subject plans to know if a subject is planned for 0 lessons this week
+    const classPlansMap = new Map<string, Map<string, number>>();
+    classes.forEach(cls => {
+      const plans = getClassSubjectPlans(cls, subjects, teachers, config);
+      const subMap = new Map<string, number>();
+      plans.forEach(p => subMap.set(p.sub.id, p.effectiveLessons));
+      classPlansMap.set(cls.id, subMap);
+    });
+
     return unassigned.filter(item => {
       const sub = subjects.find(s => s.id === item.subjectId);
       const cls = classes.find(c => c.id === item.classId);
-      if (!sub || !cls) return true;
+      if (!sub || !cls) return false;
+
+      // If this subject is intentionally planned as 0 lessons for this class this week (e.g. KHTN Lý week 1):
+      // It is NOT an unassigned error!
+      const effLimit = classPlansMap.get(cls.id)?.get(sub.id) ?? 0;
+      if (effLimit <= 0) {
+        return false;
+      }
 
       const gKey = getIntegratedGroupKey(sub);
-      if (!gKey) return true;
+      if (gKey) {
+        // Group quota and scheduled count
+        const subsInGroup = subjects.filter(s => getIntegratedGroupKey(s) === gKey);
+        let groupQuota = 0;
+        let groupScheduled = 0;
 
-      // Group quota and scheduled count
-      const subsInGroup = subjects.filter(s => getIntegratedGroupKey(s) === gKey);
-      let groupQuota = 0;
-      let groupScheduled = 0;
+        subsInGroup.forEach(s => {
+          const gradeConf = s.gradeConfigs?.[cls.grade];
+          const std = gradeConf?.term1 ?? s.lessonsPerWeek ?? 0;
+          groupQuota += std;
+          groupScheduled += timetable.filter(slot => {
+            if (slot.classId !== cls.id || slot.subjectId !== s.id) return false;
+            const t = teachers.find(teach => teach.id === slot.teacherId);
+            return isValidTeacher(t);
+          }).length;
+        });
 
-      subsInGroup.forEach(s => {
-        const gradeConf = s.gradeConfigs?.[cls.grade];
-        const std = gradeConf?.term1 ?? s.lessonsPerWeek ?? 0;
-        groupQuota += std;
-        groupScheduled += timetable.filter(slot => slot.classId === cls.id && slot.subjectId === s.id).length;
-      });
-
-      if (groupScheduled >= groupQuota && groupQuota > 0) {
-        return false;
+        if (groupScheduled >= groupQuota && groupQuota > 0) {
+          return false;
+        }
       }
 
       return true;
     });
-  }, [unassigned, timetable, classes, subjects]);
+  }, [unassigned, timetable, classes, subjects, teachers, config]);
 
   const getSlot = (day: number, period: number) => {
+    let slot: TimetableSlot | undefined;
     if (viewMode === 'class') {
-      return timetable.find(s => s.classId === selectedId && s.day === day && s.period === period);
+      slot = timetable.find(s => s.classId === selectedId && s.day === day && s.period === period);
     } else {
-      return timetable.find(s => s.teacherId === selectedId && s.day === day && s.period === period);
+      slot = timetable.find(s => s.teacherId === selectedId && s.day === day && s.period === period);
+    }
+    if (!slot) return undefined;
+    const teacher = teachers.find(t => t.id === slot.teacherId);
+    if (!isValidTeacher(teacher)) return undefined;
+    return slot;
+  };
+
+  const handleRearrange = () => {
+    if (onCompactTimetable) {
+      onCompactTimetable();
+      setNotificationMsg('✅ Đã sắp xếp lại TKB: Loại bỏ các môn 0 tiết & môn chưa phân công giáo viên, dồn các tiết học liền mạch từ tiết 1!');
+      setTimeout(() => setNotificationMsg(null), 5000);
     }
   };
 
@@ -163,9 +199,11 @@ export default function ResultTab({ timetable, unassigned, classes, subjects, te
               if (isClassOff) return 'Nghỉ';
               const slot = timetable.find(s => s.classId === c.id && s.day === dayIndex && s.period === actualPeriod);
               if (!slot) return '';
+              const teaObj = teachers.find(t => t.id === slot.teacherId);
+              if (!isValidTeacher(teaObj)) return '';
               const rawSub = subjects.find(s => s.id === slot.subjectId)?.name || '';
               const sub = slot.subTopic ? `${rawSub} (${slot.subTopic})` : rawSub;
-              const tea = teachers.find(t => t.id === slot.teacherId)?.name || '';
+              const tea = teaObj?.name || '';
               return {
                 text: slot.isExam ? `[KT] ${sub}\n(${tea})` : `${sub}\n(${tea})`,
                 isExam: slot.isExam
@@ -213,13 +251,15 @@ export default function ResultTab({ timetable, unassigned, classes, subjects, te
     ];
 
     timetable.forEach(slot => {
+      const tea = teachers.find(t => t.id === slot.teacherId);
+      if (!isValidTeacher(tea)) return;
       rawSheet.addRow({
         class: classes.find(c => c.id === slot.classId)?.name,
         day: `Thứ ${slot.day + 2}`,
         period: slot.period + 1,
         session: slot.period < config.morningLessons ? 'Sáng' : 'Chiều',
         subject: subjects.find(s => s.id === slot.subjectId)?.name,
-        teacher: teachers.find(t => t.id === slot.teacherId)?.name || ''
+        teacher: tea?.name || ''
       }).eachCell(cell => {
         cell.font = { name: fontName };
         cell.border = borderStyle;
@@ -297,8 +337,9 @@ export default function ResultTab({ timetable, unassigned, classes, subjects, te
                         const limits = getDailyPeriodsForClass(c, dayIndex, config);
                         const isClassOff = isMorning ? pIndex >= limits.morning : pIndex >= limits.afternoon;
                         const slot = timetable.find(s => s.classId === c.id && s.day === dayIndex && s.period === actualPeriod);
-                        const sub = slot ? subjects.find(s => s.id === slot.subjectId) : null;
                         const teacher = slot ? teachers.find(t => t.id === slot.teacherId) : null;
+                        const isSlotValid = slot && isValidTeacher(teacher);
+                        const sub = isSlotValid ? subjects.find(s => s.id === slot.subjectId) : null;
                         
                         const isSchoolOff = config.timeOff?.some(off => off.day === dayIndex && (off.session === 'all' || off.session === (isMorning ? 'morning' : 'afternoon')));
 
@@ -309,7 +350,7 @@ export default function ResultTab({ timetable, unassigned, classes, subjects, te
 
                         return (
                           <td key={c.id} className={`border border-border-soft px-3 py-3 text-center h-24 transition-all ${cellStyle}`}>
-                            {slot ? (
+                            {isSlotValid ? (
                               <div className="flex flex-col items-center justify-center gap-1.5">
                                 <span className={`text-[15px] font-bold leading-tight ${slot.isExam ? 'text-rose-600' : 'text-text-main'}`}>
                                   {slot.isExam ? `[KT] ${sub?.name}` : (slot.subTopic ? `${sub?.name} (${slot.subTopic})` : sub?.name)}
@@ -339,6 +380,21 @@ export default function ResultTab({ timetable, unassigned, classes, subjects, te
 
   return (
     <div className="space-y-8">
+      {notificationMsg && (
+        <div className="bg-emerald-50 border border-emerald-200 text-emerald-900 px-5 py-3.5 rounded-2xl flex items-center justify-between gap-3 text-sm font-bold shadow-sm no-print animate-in fade-in slide-in-from-top-2 duration-300">
+          <div className="flex items-center gap-2.5">
+            <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+            <span>{notificationMsg}</span>
+          </div>
+          <button 
+            onClick={() => setNotificationMsg(null)}
+            className="text-emerald-700 hover:text-emerald-900 text-xs px-2 py-1 rounded-md hover:bg-emerald-100 transition-colors"
+          >
+            Đóng
+          </button>
+        </div>
+      )}
+
       {/* Controls Bar */}
       <div className="glass-card p-4 flex flex-col md:flex-row items-center justify-between gap-4 no-print">
         <div className="flex items-center gap-3 w-full md:w-auto">
@@ -384,12 +440,12 @@ export default function ResultTab({ timetable, unassigned, classes, subjects, te
         <div className="flex items-center gap-2 w-full md:w-auto">
           {onCompactTimetable && (
             <button 
-              onClick={onCompactTimetable} 
-              className="btn-secondary flex-grow md:flex-grow-0 flex items-center justify-center gap-2 bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100 hover:border-indigo-300 font-semibold shadow-sm"
-              title="Dồn các tiết sáng cho kín, chuyển tiết thừa sang chiều và dồn liền mạch các tiết không để trống giữa buổi"
+              onClick={handleRearrange} 
+              className="btn-secondary flex-grow md:flex-grow-0 flex items-center justify-center gap-2 bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100 hover:border-indigo-300 font-bold shadow-sm transition-all"
+              title="Sắp xếp lại TKB: Loại bỏ môn 0 tiết (ví dụ KHTN Lý tuần 1), loại bỏ môn chưa phân công GV và dồn các tiết học liền mạch từ tiết 1"
             >
               <Wand2 className="w-4 h-4 text-indigo-600" />
-              Dồn kín sáng &amp; Liền mạch
+              Sắp xếp lại &amp; Loại bỏ môn 0 tiết
             </button>
           )}
           <button onClick={() => window.print()} className="btn-secondary flex-grow md:flex-grow-0 flex items-center justify-center gap-2">

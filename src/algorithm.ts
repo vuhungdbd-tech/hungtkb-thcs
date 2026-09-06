@@ -25,6 +25,25 @@ export function getDailyPeriodsForClass(
   };
 }
 
+export function isValidTeacher(teacher?: Teacher | null): boolean {
+  if (!teacher) return false;
+  if (!teacher.id || teacher.id === 'none' || teacher.id === '0') return false;
+  const name = (teacher.name || '').trim();
+  if (
+    !name ||
+    name === '0' ||
+    name.toLowerCase() === 'none' ||
+    name.toLowerCase() === 'trống' ||
+    name.toLowerCase() === 'chưa phân công' ||
+    name.toLowerCase() === 'chưa có' ||
+    name === 'null' ||
+    name === 'undefined'
+  ) {
+    return false;
+  }
+  return true;
+}
+
 export const getIntegratedGroupKey = (s: Subject): string | null => {
   if (s.type === 'integrated') {
     return s.name.includes('(') ? s.name.split('(')[0].trim() : s.name.trim();
@@ -81,7 +100,7 @@ export function getClassSubjectPlans(
     return subject.lessonsPerWeek || 0;
   };
 
-  // 1. Gather raw teacher assignments for each subject
+  // 1. Gather raw teacher assignments for each subject (filter out invalid teachers like '0', 'none')
   const subTeachersMap = new Map<string, Array<{
     teacher: Teacher;
     assignment: any;
@@ -100,6 +119,8 @@ export function getClassSubjectPlans(
     }> = [];
 
     for (const t of teachers) {
+      if (!isValidTeacher(t)) continue;
+
       for (const a of t.assignments) {
         if (a.subjectId === sub.id && a.classIds.includes(cls.id)) {
           const alloc = a.classLessons?.[cls.id];
@@ -127,7 +148,13 @@ export function getClassSubjectPlans(
   }
 
   // 2. Group statistics for integrated subjects (e.g. KHTN: Lý, Hóa, Sinh; LS&ĐL: Sử, Địa)
-  const groupStats = new Map<string, { quota: number; assignedTotal: number; remainingDeficit: number }>();
+  const groupStats = new Map<string, {
+    quota: number;
+    assignedTotal: number;
+    explicitTotal: number;
+    hasExplicit: boolean;
+    remainingDeficit: number;
+  }>();
   const groupSubsMap = new Map<string, Subject[]>();
 
   for (const sub of subjects) {
@@ -141,17 +168,24 @@ export function getClassSubjectPlans(
   groupSubsMap.forEach((subsInGroup, gKey) => {
     let quota = 0;
     let assignedTotal = 0;
+    let explicitTotal = 0;
+    let hasExplicit = false;
 
     subsInGroup.forEach(s => {
       quota += getSubjectLessons(s, cls.grade);
       const tList = subTeachersMap.get(s.id) || [];
       tList.forEach(tInfo => {
         assignedTotal += Math.max(0, tInfo.allocatedLessons);
+        const alloc = tInfo.assignment?.classLessons?.[cls.id];
+        if (alloc !== undefined && alloc !== null && alloc >= 0) {
+          explicitTotal += alloc;
+          hasExplicit = true;
+        }
       });
     });
 
-    const remainingDeficit = Math.max(0, quota - assignedTotal);
-    groupStats.set(gKey, { quota, assignedTotal, remainingDeficit });
+    const remainingDeficit = Math.max(0, quota - (hasExplicit ? explicitTotal : assignedTotal));
+    groupStats.set(gKey, { quota, assignedTotal, explicitTotal, hasExplicit, remainingDeficit });
   });
 
   // 3. Compute effective lessons and plan item for each subject
@@ -171,23 +205,43 @@ export function getClassSubjectPlans(
         if (allExplicitZero) {
           effectiveLessons = 0;
         } else {
-          effectiveLessons = assigned.reduce((sum, info) => sum + Math.max(0, info.allocatedLessons), 0);
+          // Check if this specific sub-subject has explicit allocated lessons (e.g. alloc >= 0)
+          const subHasExplicit = assigned.some(info => {
+            const alloc = info.assignment?.classLessons?.[cls.id];
+            return alloc !== undefined && alloc !== null && alloc >= 0;
+          });
+
+          if (subHasExplicit) {
+            effectiveLessons = assigned.reduce((sum, info) => sum + Math.max(0, info.allocatedLessons), 0);
+          } else {
+            // No explicit allocation for this sub-subject:
+            // If the entire group quota is already filled by other sub-subjects that have explicit lessons (e.g. Hóa 3 + Sinh 1 = 4 >= 4)
+            // then Lý intentionally has 0 lessons this week!
+            if (gStat.hasExplicit && gStat.explicitTotal >= gStat.quota) {
+              effectiveLessons = 0;
+            } else if (gStat.hasExplicit) {
+              effectiveLessons = Math.min(stdLessons, gStat.remainingDeficit);
+              gStat.remainingDeficit = Math.max(0, gStat.remainingDeficit - effectiveLessons);
+            } else {
+              effectiveLessons = assigned.reduce((sum, info) => sum + Math.max(0, info.allocatedLessons), 0);
+            }
+          }
         }
       } else {
         // No teacher assigned for this specific sub-subject
-        if (gStat.assignedTotal >= gStat.quota) {
-          // The whole group quota is already satisfied by other sub-subjects (e.g. Hóa 3 + Sinh 1 = 4 >= 4)
-          // Therefore, this sub-subject intentionally has 0 lessons this week (e.g. Lý has 0 lessons in week 1)!
+        if ((gStat.hasExplicit && gStat.explicitTotal >= gStat.quota) || gStat.assignedTotal >= gStat.quota) {
           effectiveLessons = 0;
         } else {
-          // Group has deficit: cap missing lessons to remaining deficit of the whole group
-          effectiveLessons = Math.min(stdLessons, gStat.remainingDeficit);
-          gStat.remainingDeficit = Math.max(0, gStat.remainingDeficit - effectiveLessons);
+          // Unassigned subject: do not schedule on timetable
+          effectiveLessons = 0;
         }
       }
     } else {
       // Non-integrated subject
-      if (assigned.length > 0) {
+      if (assigned.length === 0) {
+        // No teacher assigned: do not schedule on timetable
+        effectiveLessons = 0;
+      } else {
         const allExplicitZero = assigned.every(info => info.allocatedLessons === 0);
         if (allExplicitZero) {
           effectiveLessons = 0;
@@ -195,13 +249,16 @@ export function getClassSubjectPlans(
           let explicitSum = 0;
           let hasExplicit = false;
           assigned.forEach(info => {
-            if (info.allocatedLessons >= 0) {
-              explicitSum += info.allocatedLessons;
+            const alloc = info.assignment?.classLessons?.[cls.id];
+            if (alloc !== undefined && alloc !== null && alloc >= 0) {
+              explicitSum += alloc;
               hasExplicit = true;
             }
           });
-          if (hasExplicit && explicitSum > 0) {
+          if (hasExplicit) {
             effectiveLessons = explicitSum;
+          } else {
+            effectiveLessons = assigned.reduce((sum, info) => sum + Math.max(0, info.allocatedLessons), 0);
           }
         }
       }
@@ -1022,20 +1079,8 @@ export function generateTimetable(
             isExam: l.isExam,
             isFixed: true
           });
-        } else {
-          // Reserve the slot as a placeholder if not explicitly in the lessons list
-          classSchedule[cls.id][day][period] = subjectId;
-          classSubjectDays[cls.id][subjectId].add(day);
-          
-          slots.push({
-            classId: cls.id,
-            day,
-            period,
-            subjectId,
-            teacherId: 'none',
-            isFixed: true
-          });
         }
+        // If not in lessons pool (no teacher assigned or 0 lessons planned), do not push unassigned placeholder slot
       }
     }
   }
@@ -1484,6 +1529,75 @@ function getPermutations<T>(arr: T[]): T[][] {
 }
 
 /**
+ * Filters out all invalid slots from a timetable:
+ * - Slots without a valid teacher (teacherId is 'none', '0', empty, or teacher name is '0'/'none'/unassigned)
+ * - Slots belonging to a subject that has 0 effective lessons for that class in this week (e.g. KHTN Lý in Week 1)
+ * - Slots for teachers not assigned to that class & subject
+ * - Excess slots exceeding the class-subject planned lesson quota
+ */
+export function cleanAndFilterTimetableSlots(
+  initialSlots: TimetableSlot[],
+  classes: Class[],
+  subjects: Subject[],
+  teachers: Teacher[],
+  config: Config
+): TimetableSlot[] {
+  if (!initialSlots || initialSlots.length === 0) return [];
+
+  // Pre-calculate planned lessons for each class to enforce limits and detect 0-lesson subjects
+  const classPlansMap = new Map<string, Map<string, number>>();
+  for (const cls of classes) {
+    const plans = getClassSubjectPlans(cls, subjects, teachers, config);
+    const subLimitMap = new Map<string, number>();
+    for (const p of plans) {
+      subLimitMap.set(p.sub.id, p.effectiveLessons);
+    }
+    classPlansMap.set(cls.id, subLimitMap);
+  }
+
+  // Count placed slots per class and subject to prevent exceeding effectiveLessons
+  const placedCount: Record<string, Record<string, number>> = {};
+  const validSlots: TimetableSlot[] = [];
+
+  for (const slot of initialSlots) {
+    // 1. Check class exists
+    const cls = classes.find(c => c.id === slot.classId);
+    if (!cls) continue;
+
+    // 2. Check subject exists
+    const sub = subjects.find(s => s.id === slot.subjectId);
+    if (!sub) continue;
+
+    // 3. Check teacher is valid and not 'none' / '0'
+    if (!slot.teacherId || slot.teacherId === 'none' || slot.teacherId === '0') continue;
+    const teacher = teachers.find(t => t.id === slot.teacherId);
+    if (!isValidTeacher(teacher)) continue;
+
+    // 4. Check effective lessons for this class & subject in this week
+    const effectiveLimit = classPlansMap.get(cls.id)?.get(sub.id) ?? 0;
+    if (effectiveLimit <= 0) continue; // 0-lesson subject (e.g. Lý week 1): EXCLUDE!
+
+    // 5. Check that this teacher is actually assigned to this class & subject
+    const isTeacherAssigned = teacher?.assignments?.some(a =>
+      a.subjectId === sub.id &&
+      a.classIds.includes(cls.id) &&
+      (a.classLessons?.[cls.id] === undefined || a.classLessons?.[cls.id] > 0)
+    );
+    if (!isTeacherAssigned) continue;
+
+    // 6. Check slot quota doesn't exceed effectiveLessons
+    if (!placedCount[cls.id]) placedCount[cls.id] = {};
+    const currentPlaced = placedCount[cls.id][sub.id] || 0;
+    if (currentPlaced >= effectiveLimit) continue; // Exceeds allowed quota: EXCLUDE!
+
+    placedCount[cls.id][sub.id] = currentPlaced + 1;
+    validSlots.push({ ...slot });
+  }
+
+  return validSlots;
+}
+
+/**
  * Compacts timetable so that:
  * 1. Morning slots are filled first up to configured capacity (excess pushed to afternoon).
  * 2. Lessons in every session are strictly contiguous starting from period 1 (tiết 1, 2, 3...).
@@ -1496,7 +1610,9 @@ export function compactTimetable(
   teachers: Teacher[],
   config: Config
 ): TimetableSlot[] {
-  const slots = initialSlots.map(s => ({ ...s }));
+  // Step 1: Clean out any 0-lesson subjects or unassigned/invalid teachers first
+  const cleanedSlots = cleanAndFilterTimetableSlots(initialSlots, classes, subjects, teachers, config);
+  const slots = cleanedSlots.map(s => ({ ...s }));
   const morningLessons = Math.max(1, config.morningLessons || 4);
   const afternoonLessons = Math.max(0, config.afternoonLessons || 0);
   const totalPeriods = morningLessons + afternoonLessons;
