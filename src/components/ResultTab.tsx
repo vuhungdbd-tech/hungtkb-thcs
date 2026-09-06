@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { Class, Subject, Teacher, Config, TimetableSlot } from '../types';
-import { LessonToSchedule, getDailyPeriodsForClass, getIntegratedGroupKey, isValidTeacher, getClassSubjectPlans } from '../algorithm';
+import { LessonToSchedule, getDailyPeriodsForClass, getIntegratedGroupKey, isValidTeacher, getClassSubjectPlans, compactTimetable } from '../algorithm';
 import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
 import { 
@@ -61,6 +61,11 @@ export default function ResultTab({ timetable, unassigned, classes, subjects, te
   const days = Array.from({ length: numDays }, (_, i) => i);
   const periods = Array.from({ length: totalPeriods }, (_, i) => i);
 
+  const effectiveTimetable = useMemo(() => {
+    if (!timetable || timetable.length === 0) return [];
+    return compactTimetable(timetable, classes, subjects, teachers, config);
+  }, [timetable, classes, subjects, teachers, config]);
+
   const validUnassigned = useMemo(() => {
     if (!unassigned || unassigned.length === 0) return [];
 
@@ -96,7 +101,7 @@ export default function ResultTab({ timetable, unassigned, classes, subjects, te
           const gradeConf = s.gradeConfigs?.[cls.grade];
           const std = gradeConf?.term1 ?? s.lessonsPerWeek ?? 0;
           groupQuota += std;
-          groupScheduled += timetable.filter(slot => {
+          groupScheduled += effectiveTimetable.filter(slot => {
             if (slot.classId !== cls.id || slot.subjectId !== s.id) return false;
             const t = teachers.find(teach => teach.id === slot.teacherId);
             return isValidTeacher(t);
@@ -110,14 +115,14 @@ export default function ResultTab({ timetable, unassigned, classes, subjects, te
 
       return true;
     });
-  }, [unassigned, timetable, classes, subjects, teachers, config]);
+  }, [unassigned, effectiveTimetable, classes, subjects, teachers, config]);
 
   const getSlot = (day: number, period: number) => {
     let slot: TimetableSlot | undefined;
     if (viewMode === 'class') {
-      slot = timetable.find(s => s.classId === selectedId && s.day === day && s.period === period);
+      slot = effectiveTimetable.find(s => s.classId === selectedId && s.day === day && s.period === period);
     } else {
-      slot = timetable.find(s => s.teacherId === selectedId && s.day === day && s.period === period);
+      slot = effectiveTimetable.find(s => s.teacherId === selectedId && s.day === day && s.period === period);
     }
     if (!slot) return undefined;
     const teacher = teachers.find(t => t.id === slot.teacherId);
@@ -197,7 +202,7 @@ export default function ResultTab({ timetable, unassigned, classes, subjects, te
               const limits = getDailyPeriodsForClass(c, dayIndex, config);
               const isClassOff = isMorning ? p >= limits.morning : p >= limits.afternoon;
               if (isClassOff) return 'Nghỉ';
-              const slot = timetable.find(s => s.classId === c.id && s.day === dayIndex && s.period === actualPeriod);
+              const slot = effectiveTimetable.find(s => s.classId === c.id && s.day === dayIndex && s.period === actualPeriod);
               if (!slot) return '';
               const teaObj = teachers.find(t => t.id === slot.teacherId);
               if (!isValidTeacher(teaObj)) return '';
@@ -250,7 +255,7 @@ export default function ResultTab({ timetable, unassigned, classes, subjects, te
       { header: 'Giáo viên', key: 'teacher', width: 20 },
     ];
 
-    timetable.forEach(slot => {
+    effectiveTimetable.forEach(slot => {
       const tea = teachers.find(t => t.id === slot.teacherId);
       if (!isValidTeacher(tea)) return;
       rawSheet.addRow({
@@ -336,7 +341,7 @@ export default function ResultTab({ timetable, unassigned, classes, subjects, te
                       {classes.map(c => {
                         const limits = getDailyPeriodsForClass(c, dayIndex, config);
                         const isClassOff = isMorning ? pIndex >= limits.morning : pIndex >= limits.afternoon;
-                        const slot = timetable.find(s => s.classId === c.id && s.day === dayIndex && s.period === actualPeriod);
+                        const slot = effectiveTimetable.find(s => s.classId === c.id && s.day === dayIndex && s.period === actualPeriod);
                         const teacher = slot ? teachers.find(t => t.id === slot.teacherId) : null;
                         const isSlotValid = slot && isValidTeacher(teacher);
                         const sub = isSlotValid ? subjects.find(s => s.id === slot.subjectId) : null;
@@ -524,7 +529,7 @@ export default function ResultTab({ timetable, unassigned, classes, subjects, te
                     const limits = getDailyPeriodsForClass(cls, d, config);
                     totalAvailableSlots += (limits.morning + limits.afternoon);
                   }
-                  const placedCount = timetable.filter(s => s.classId === cls.id).length;
+                  const placedCount = effectiveTimetable.filter(s => s.classId === cls.id).length;
                   const diff = totalAvailableSlots - placedCount;
 
                   return (

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { initialClasses, initialSubjects, initialTeachers, initialConfig } from './data';
 import { Class, Subject, Teacher, Config, TimetableSlot } from './types';
-import { generateTimetable, autoOptimizeClassDailyPeriods, compactTimetable, LessonToSchedule } from './algorithm';
+import { generateTimetable, autoOptimizeClassDailyPeriods, compactTimetable, sanitizeWeeklyTimetables, LessonToSchedule } from './algorithm';
 import ConfigTab from './components/ConfigTab';
 import ResultTab from './components/ResultTab';
 import LicenseManager from './components/LicenseManager';
@@ -211,8 +211,14 @@ export default function App() {
       const saved = localStorage.getItem('timetableData');
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (parsed.weeklyTimetables) return parsed.weeklyTimetables;
-        if (parsed.timetable) return { 1: { timetable: parsed.timetable, unassigned: parsed.unassigned || [] } };
+        const rawWeekly = parsed.weeklyTimetables || (parsed.timetable ? { 1: { timetable: parsed.timetable, unassigned: parsed.unassigned || [] } } : null);
+        if (rawWeekly) {
+          const lClasses = Array.isArray(parsed.classes) && parsed.classes.length > 0 ? parsed.classes : initialClasses;
+          const lSubjects = Array.isArray(parsed.subjects) && parsed.subjects.length > 0 ? parsed.subjects : initialSubjects;
+          const lTeachers = Array.isArray(parsed.teachers) && parsed.teachers.length > 0 ? parsed.teachers : initialTeachers;
+          const lConfig = parsed.config ? { ...initialConfig, ...parsed.config } : initialConfig;
+          return sanitizeWeeklyTimetables(rawWeekly, lClasses, lSubjects, lTeachers, lConfig);
+        }
       }
     } catch {}
     return {};
@@ -313,14 +319,21 @@ export default function App() {
           return;
         }
 
+        const lClasses = parsed.classes || initialClasses;
+        const lSubjects = parsed.subjects || initialSubjects;
+        const lTeachers = parsed.teachers || initialTeachers;
+        const lConfig = parsed.config ? { ...initialConfig, ...parsed.config } : initialConfig;
+
         if (parsed.classes) setClasses(parsed.classes);
         if (parsed.subjects) setSubjects(parsed.subjects);
         if (parsed.teachers) setTeachers(parsed.teachers);
-        if (parsed.config) setConfig({ ...initialConfig, ...parsed.config });
-        if (parsed.weeklyTimetables) {
-          setWeeklyTimetables(parsed.weeklyTimetables);
-        } else if (parsed.timetable) {
-          setWeeklyTimetables({ 1: { timetable: parsed.timetable, unassigned: parsed.unassigned || [] } });
+        if (parsed.config) setConfig(lConfig);
+
+        const rawWeekly = parsed.weeklyTimetables || (parsed.timetable ? { 1: { timetable: parsed.timetable, unassigned: parsed.unassigned || [] } } : null);
+        if (rawWeekly) {
+          const sanitized = sanitizeWeeklyTimetables(rawWeekly, lClasses, lSubjects, lTeachers, lConfig);
+          setWeeklyTimetables(sanitized);
+          parsed.weeklyTimetables = sanitized;
         }
         if (parsed.currentWeek) setCurrentWeek(parsed.currentWeek);
 
@@ -363,11 +376,22 @@ export default function App() {
       }
       const parsed = JSON.parse(backup);
       if (confirm('Bạn có chắc chắn muốn khôi phục lại dữ liệu từ bản sao lưu gần nhất trong máy không?')) {
+        const lClasses = parsed.classes || initialClasses;
+        const lSubjects = parsed.subjects || initialSubjects;
+        const lTeachers = parsed.teachers || initialTeachers;
+        const lConfig = parsed.config ? { ...initialConfig, ...parsed.config } : initialConfig;
+
         if (parsed.classes) setClasses(parsed.classes);
         if (parsed.subjects) setSubjects(parsed.subjects);
         if (parsed.teachers) setTeachers(parsed.teachers);
-        if (parsed.config) setConfig({ ...initialConfig, ...parsed.config });
-        if (parsed.weeklyTimetables) setWeeklyTimetables(parsed.weeklyTimetables);
+        if (parsed.config) setConfig(lConfig);
+
+        const rawWeekly = parsed.weeklyTimetables || (parsed.timetable ? { 1: { timetable: parsed.timetable, unassigned: parsed.unassigned || [] } } : null);
+        if (rawWeekly) {
+          const sanitized = sanitizeWeeklyTimetables(rawWeekly, lClasses, lSubjects, lTeachers, lConfig);
+          setWeeklyTimetables(sanitized);
+          parsed.weeklyTimetables = sanitized;
+        }
         if (parsed.currentWeek) setCurrentWeek(parsed.currentWeek);
         
         localStorage.setItem('timetableData', backup);
@@ -483,14 +507,20 @@ export default function App() {
     if (savedData) {
       try {
         localParsed = JSON.parse(savedData);
+        const lClasses = localParsed.classes || initialClasses;
+        const lSubjects = localParsed.subjects || initialSubjects;
+        const lTeachers = localParsed.teachers || initialTeachers;
+        const lConfig = localParsed.config ? { ...initialConfig, ...localParsed.config } : initialConfig;
+
         if (localParsed.classes) setClasses(localParsed.classes);
         if (localParsed.subjects) setSubjects(localParsed.subjects);
         if (localParsed.teachers) setTeachers(localParsed.teachers);
-        if (localParsed.config) setConfig({ ...initialConfig, ...localParsed.config });
-        if (localParsed.weeklyTimetables) {
-          setWeeklyTimetables(localParsed.weeklyTimetables);
-        } else if (localParsed.timetable) {
-          setWeeklyTimetables({ 1: { timetable: localParsed.timetable, unassigned: localParsed.unassigned || [] } });
+        if (localParsed.config) setConfig(lConfig);
+
+        const rawWeekly = localParsed.weeklyTimetables || (localParsed.timetable ? { 1: { timetable: localParsed.timetable, unassigned: localParsed.unassigned || [] } } : null);
+        if (rawWeekly) {
+          const sanitized = sanitizeWeeklyTimetables(rawWeekly, lClasses, lSubjects, lTeachers, lConfig);
+          setWeeklyTimetables(sanitized);
         }
         if (localParsed.currentWeek) setCurrentWeek(localParsed.currentWeek);
       } catch (e) {
@@ -553,14 +583,21 @@ export default function App() {
       }
 
       if (remoteRecord) {
+        const rClasses = remoteRecord.classes || initialClasses;
+        const rSubjects = remoteRecord.subjects || initialSubjects;
+        const rTeachers = remoteRecord.teachers || initialTeachers;
+        const rConfig = remoteRecord.config ? { ...initialConfig, ...remoteRecord.config } : initialConfig;
+
         if (remoteRecord.classes) setClasses(remoteRecord.classes);
         if (remoteRecord.subjects) setSubjects(remoteRecord.subjects);
         if (remoteRecord.teachers) setTeachers(remoteRecord.teachers);
-        if (remoteRecord.config) setConfig({ ...initialConfig, ...remoteRecord.config });
-        if (remoteRecord.weeklyTimetables) {
-          setWeeklyTimetables(remoteRecord.weeklyTimetables);
-        } else if (remoteRecord.timetable) {
-          setWeeklyTimetables({ 1: { timetable: remoteRecord.timetable, unassigned: remoteRecord.unassigned || [] } });
+        if (remoteRecord.config) setConfig(rConfig);
+
+        const rawWeekly = remoteRecord.weeklyTimetables || (remoteRecord.timetable ? { 1: { timetable: remoteRecord.timetable, unassigned: remoteRecord.unassigned || [] } } : null);
+        if (rawWeekly) {
+          const sanitized = sanitizeWeeklyTimetables(rawWeekly, rClasses, rSubjects, rTeachers, rConfig);
+          setWeeklyTimetables(sanitized);
+          remoteRecord.weeklyTimetables = sanitized;
         }
         if (remoteRecord.currentWeek) setCurrentWeek(remoteRecord.currentWeek);
 

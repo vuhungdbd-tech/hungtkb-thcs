@@ -1347,6 +1347,15 @@ export function generateTimetable(
 
             if (classSchedule[cls.id][d2][p2]) continue;
 
+            // Ensure contiguity: p2 MUST be the lowestEmpty of that session on d2
+            const sessionStart2 = isMorning2 ? 0 : config.morningLessons;
+            const sessionEnd2 = isMorning2 ? config.morningLessons : totalPeriods;
+            let lowestEmpty2 = sessionStart2;
+            while (lowestEmpty2 < sessionEnd2 && classSchedule[cls.id][d2]?.[lowestEmpty2]) {
+              lowestEmpty2++;
+            }
+            if (p2 !== lowestEmpty2) continue;
+
             if (existingTeacherId !== 'none') {
               if (isTeacherBusyForClass(existingTeacherId, d2, p2, cls.id, existingSubId)) continue;
             }
@@ -1745,26 +1754,32 @@ export function compactTimetable(
             const aftStart = morningLessons;
             const aftEnd = totalPeriods;
 
-            for (let pA = aftStart; pA < aftEnd; pA++) {
-              const subId = classSchedule[cls.id]?.[dA]?.[pA];
-              if (!subId) continue;
-
-              const s = slots.find(slot => slot.classId === cls.id && slot.day === dA && slot.period === pA);
-              if (!s || s.isFixed || s.isExam) continue;
-
-              const sub = subjects.find(sb => sb.id === subId);
-              if (sub?.session === 'afternoon') continue; // explicitly requires afternoon
-
-              if (dA !== dM && classSubjectDays[cls.id]?.[subId]?.has(dM)) continue; // avoid duplicate subject on dM
-
-              const tId = s.teacherId;
-              if (tId !== 'none' && isTeacherBusyForClass(tId, dM, pM, cls.id, subId)) continue;
-
-              // Move afternoon lesson to morning!
-              moveSlot(s, dM, pM);
-              movedAny = true;
-              break;
+            // Only take the TAIL lesson of afternoon to NEVER leave holes in afternoon!
+            let pTail = aftEnd - 1;
+            while (pTail >= aftStart && !classSchedule[cls.id]?.[dA]?.[pTail]) {
+              pTail--;
             }
+            if (pTail < aftStart) continue;
+            const pA = pTail;
+
+            const subId = classSchedule[cls.id]?.[dA]?.[pA];
+            if (!subId) continue;
+
+            const s = slots.find(slot => slot.classId === cls.id && slot.day === dA && slot.period === pA);
+            if (!s || s.isFixed || s.isExam) continue;
+
+            const sub = subjects.find(sb => sb.id === subId);
+            if (sub?.session === 'afternoon') continue; // explicitly requires afternoon
+
+            if (dA !== dM && classSubjectDays[cls.id]?.[subId]?.has(dM)) continue; // avoid duplicate subject on dM
+
+            const tId = s.teacherId;
+            if (tId !== 'none' && isTeacherBusyForClass(tId, dM, pM, cls.id, subId)) continue;
+
+            // Move afternoon lesson to morning!
+            moveSlot(s, dM, pM);
+            movedAny = true;
+            break;
           }
         }
       }
@@ -1982,8 +1997,8 @@ export function compactTimetable(
         for (let p = startP; p < startP + K; p++) {
           if (!classSchedule[cls.id]?.[d]?.[p]) {
             // Period p is an empty hole!
-            // Find any slot of this class currently sitting at period > p
-            const cand = curSessionSlots.find(s => s.period > p && !s.isFixed && !s.isExam);
+            // Dynamically find any slot of this class currently sitting at period > p in this session
+            const cand = slots.find(s => s.classId === cls.id && s.day === d && s.period > p && s.period < endP);
             if (!cand) continue;
 
             // 1. Can cand move to p?
@@ -2036,6 +2051,19 @@ export function compactTimetable(
             // 4. Guaranteed Contiguity Override:
             // Shift candidate down to p directly so students NEVER have an empty period in the middle of session!
             if (!isSchoolOff(d, p)) {
+              // If another class collides with cand's teacher at (d, p), try to shift that other class's slot
+              if (cand.teacherId !== 'none' && teacherSchedule[cand.teacherId]?.[d]?.[p]) {
+                const collidingClsId = teacherSchedule[cand.teacherId][d][p];
+                if (collidingClsId !== cls.id) {
+                  const collSlot = slots.find(s => s.classId === collidingClsId && s.day === d && s.period === p);
+                  if (collSlot && !collSlot.isFixed && !collSlot.isExam) {
+                    // Try to move collSlot to cand's old period cand.period
+                    if (!classSchedule[collidingClsId]?.[d]?.[cand.period] && !isSchoolOff(d, cand.period)) {
+                      moveSlot(collSlot, d, cand.period);
+                    }
+                  }
+                }
+              }
               moveSlot(cand, d, p);
             }
           }
@@ -2044,6 +2072,58 @@ export function compactTimetable(
     }
   }
 
+  // =========================================================================
+  // FINAL SANITY GUARANTEE: Mathematical Zero-Gap Compactor
+  // For every single class, day, and session, lessons MUST be ordered contiguously
+  // starting at startP without skipping any periods.
+  // =========================================================================
+  for (const cls of classes) {
+    for (let d = 0; d < config.days; d++) {
+      for (const isMorning of [true, false]) {
+        const startP = isMorning ? 0 : morningLessons;
+        const sessionSpan = isMorning ? morningLessons : afternoonLessons;
+        if (sessionSpan <= 0) continue;
+        const endP = startP + sessionSpan;
+
+        const sessionSlots = slots
+          .filter(s => s.classId === cls.id && s.day === d && s.period >= startP && s.period < endP)
+          .sort((a, b) => a.period - b.period);
+
+        for (let i = 0; i < sessionSlots.length; i++) {
+          const targetP = startP + i;
+          const s = sessionSlots[i];
+          if (s.period !== targetP) {
+            moveSlot(s, d, targetP);
+          }
+        }
+      }
+    }
+  }
+
   return slots;
 }
+
+export const sanitizeWeeklyTimetables = (
+  weekly: Record<number, { timetable: TimetableSlot[], unassigned: any[], weekType?: 'all' | 'odd' | 'even' | 'custom' }>,
+  classes: Class[],
+  subjects: Subject[],
+  teachers: Teacher[],
+  config: Config
+): Record<number, { timetable: TimetableSlot[], unassigned: any[], weekType?: 'all' | 'odd' | 'even' | 'custom' }> => {
+  const result: Record<number, { timetable: TimetableSlot[], unassigned: any[], weekType?: 'all' | 'odd' | 'even' | 'custom' }> = {};
+  for (const [wStr, wData] of Object.entries(weekly)) {
+    const wNum = Number(wStr);
+    if (!wData || !Array.isArray(wData.timetable)) {
+      result[wNum] = wData;
+      continue;
+    }
+    const wType = wData.weekType || (wNum % 2 === 1 ? 'odd' : 'even');
+    const weekConfig: Config = { ...config, currentWeek: wNum, currentWeekType: wType };
+    result[wNum] = {
+      ...wData,
+      timetable: compactTimetable(wData.timetable, classes, subjects, teachers, weekConfig)
+    };
+  }
+  return result;
+};
 
