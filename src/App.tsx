@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { initialClasses, initialSubjects, initialTeachers, initialConfig } from './data';
 import { Class, Subject, Teacher, Config, TimetableSlot } from './types';
-import { generateTimetable, autoOptimizeClassDailyPeriods, LessonToSchedule } from './algorithm';
+import { generateTimetable, autoOptimizeClassDailyPeriods, compactTimetable, LessonToSchedule } from './algorithm';
 import ConfigTab from './components/ConfigTab';
 import ResultTab from './components/ResultTab';
 import LicenseManager from './components/LicenseManager';
@@ -751,6 +751,37 @@ export default function App() {
     handleGenerate(opt.newConfig);
   };
 
+  const handleCompactTimetable = () => {
+    const currentSlots = weeklyTimetables[currentWeek]?.timetable || [];
+    if (currentSlots.length === 0) return;
+    const compacted = compactTimetable(currentSlots, classes, subjects, teachers, config);
+    const updatedWeekly = {
+      ...weeklyTimetables,
+      [currentWeek]: {
+        ...weeklyTimetables[currentWeek],
+        timetable: compacted
+      }
+    };
+    setWeeklyTimetables(updatedWeekly);
+
+    const dataToSave = { classes, subjects, teachers, config, weeklyTimetables: updatedWeekly, currentWeek };
+    localStorage.setItem('timetableData', JSON.stringify(dataToSave));
+    try {
+      localStorage.setItem('timetableData_backup', JSON.stringify(dataToSave));
+    } catch {}
+
+    if (session && supabase) {
+      const keysToSync = Array.from(new Set([session.user.id, session.user.email].filter(Boolean)));
+      for (const k of keysToSync) {
+        supabase.from('app_data').upsert({
+          id: k,
+          data: dataToSave,
+          updated_at: new Date().toISOString()
+        }).catch(() => {});
+      }
+    }
+  };
+
   const handleReset = async () => {
     if (window.confirm('Bạn có chắc chắn muốn reset toàn bộ dữ liệu về mặc định?')) {
       setClasses(initialClasses);
@@ -1041,6 +1072,7 @@ export default function App() {
                 teachers={teachers} 
                 config={config} 
                 onAutoBalanceAndRegenerate={handleAutoBalanceAndGenerate}
+                onCompactTimetable={handleCompactTimetable}
               />
             ) : (
               <LicenseManager />

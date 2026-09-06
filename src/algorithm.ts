@@ -164,47 +164,40 @@ export function autoOptimizeClassDailyPeriods(
       const hasSaturdayMorning = openMorningDays.includes(5);
       const weekdayMornings = openMorningDays.filter(d => d !== 5);
 
-      // Strategy 1: If can fit entirely in mornings with 4 periods:
-      if (targetLessons <= openMorningDays.length * 4) {
+      const morningCap = Math.max(1, config.morningLessons || 4);
+      const satMorningCap = Math.min(morningCap, 4);
+
+      // Total morning capacity based on configured morning lessons
+      const totalMorningCapacity = weekdayMornings.length * morningCap + (hasSaturdayMorning ? satMorningCap : 0);
+
+      // Strategy 1: If can fit entirely in mornings:
+      if (targetLessons <= totalMorningCapacity) {
         let rem = targetLessons;
+        const basePerDay = Math.floor(targetLessons / openMorningDays.length);
+        let extra = targetLessons % openMorningDays.length;
         for (const d of openMorningDays) {
-          if (rem <= 0) break;
-          const alloc = Math.min(4, rem);
+          const cap = (d === 5) ? satMorningCap : morningCap;
+          const alloc = Math.min(cap, basePerDay + (extra > 0 ? 1 : 0));
+          if (extra > 0) extra--;
           schedule[d].morning = alloc;
           rem -= alloc;
         }
         return schedule;
       }
 
-      // Strategy 2: If can fit entirely in mornings with up to 5 periods:
-      if (targetLessons <= (weekdayMornings.length * 5 + (hasSaturdayMorning ? 4 : 0))) {
-        // First allocate 4 to all open mornings
-        let rem = targetLessons;
-        for (const d of openMorningDays) {
-          schedule[d].morning = 4;
-          rem -= 4;
-        }
-        // Distribute extra 5th period to weekday mornings
-        for (const d of weekdayMornings) {
-          if (rem <= 0) break;
-          schedule[d].morning = 5;
-          rem--;
-        }
-        return schedule;
-      }
-
-      // Strategy 3: Target lessons > morning capacity (e.g. 26 to 32 lessons)
-      // Max out weekday mornings to 5 periods, and Saturday morning to 4 (if open)
+      // Strategy 2: Target lessons > morning capacity (e.g. 26 to 32 lessons)
+      // Fill ALL open mornings to the configured limit (e.g. 4 or 5 periods)
       let morningTotal = 0;
       for (const d of weekdayMornings) {
-        schedule[d].morning = 5;
-        morningTotal += 5;
+        schedule[d].morning = morningCap;
+        morningTotal += morningCap;
       }
       if (hasSaturdayMorning) {
-        schedule[5].morning = 4;
-        morningTotal += 4;
+        schedule[5].morning = satMorningCap;
+        morningTotal += satMorningCap;
       }
 
+      // Remaining lessons are pushed to afternoons
       let remainingAfternoon = targetLessons - morningTotal;
 
       // Preferred afternoons: T3 (1), T5 (3), T4 (2), T6 (4), T2 (0)
@@ -212,7 +205,8 @@ export function autoOptimizeClassDailyPeriods(
 
       for (const d of preferredAfternoonOrder) {
         if (remainingAfternoon <= 0) break;
-        const alloc = Math.min(3, remainingAfternoon);
+        const afternoonCap = Math.max(1, config.afternoonLessons || 3);
+        const alloc = Math.min(afternoonCap, remainingAfternoon);
         schedule[d].afternoon = alloc;
         remainingAfternoon -= alloc;
       }
@@ -220,8 +214,9 @@ export function autoOptimizeClassDailyPeriods(
       if (remainingAfternoon > 0) {
         for (const d of preferredAfternoonOrder) {
           if (remainingAfternoon <= 0) break;
-          if (schedule[d].afternoon < 4) {
-            const add = Math.min(4 - schedule[d].afternoon, remainingAfternoon);
+          const afternoonMax = Math.max(1, config.afternoonLessons || 4);
+          if (schedule[d].afternoon < afternoonMax) {
+            const add = Math.min(afternoonMax - schedule[d].afternoon, remainingAfternoon);
             schedule[d].afternoon += add;
             remainingAfternoon -= add;
           }
@@ -337,7 +332,7 @@ export function generateTimetable(
 
   config = effectiveConfig;
 
-  const slots: TimetableSlot[] = [];
+  let slots: TimetableSlot[] = [];
   const unassigned: LessonToSchedule[] = [];
   const totalPeriods = config.morningLessons + config.afternoonLessons;
 
@@ -983,8 +978,27 @@ export function generateTimetable(
               lowestEmpty++;
             }
 
-            // Strong penalty if period leaves a gap (not filling from period 1 onwards)
-            const gapPenalty = (period - lowestEmpty) * 100000;
+            // Critical penalty if period leaves a gap (not filling from period 1 onwards)
+            // Strictly prevents non-contiguous slots: e.g. tiết 1 có, tiết 2 trống, tiết 3 có
+            const gapPenalty = (period - lowestEmpty) * 5000000;
+
+            // Morning-first priority: Heavily penalize scheduling into afternoon while morning slots are still open
+            let afternoonPrematurePenalty = 0;
+            if (!isMorning && lesson.session !== 'afternoon') {
+              let emptyMorningSlots = 0;
+              for (let d = 0; d < config.days; d++) {
+                const dLim = cls ? getDailyPeriodsForClass(cls, d, config) : { morning: config.morningLessons, afternoon: config.afternoonLessons };
+                for (let p = 0; p < dLim.morning; p++) {
+                  if (!isSchoolOff(d, p) && !classSchedule[lesson.classId][d]?.[p]) {
+                    emptyMorningSlots++;
+                  }
+                }
+              }
+              if (emptyMorningSlots > 0) {
+                // Massive penalty so all valid morning slots across the week are filled first before using afternoon
+                afternoonPrematurePenalty = 10000000 + emptyMorningSlots * 500000;
+              }
+            }
 
             // Strong reward for filling days that already have lessons up to targetCapacity
             const underFill = targetCapacity - (currentCount + (lesson.isDouble ? 2 : 1));
@@ -1066,7 +1080,7 @@ export function generateTimetable(
             }
 
             const relaxPenalty = relaxConstraints ? 2000000 : 0;
-            const score = gapPenalty + targetFillReward + dayOrderPenalty + teacherGapPenalty + gradeParallelBonus + staggerGradePenalty + morningPriorityPenalty + relaxPenalty + Math.random();
+            const score = gapPenalty + afternoonPrematurePenalty + targetFillReward + dayOrderPenalty + teacherGapPenalty + gradeParallelBonus + staggerGradePenalty + morningPriorityPenalty + relaxPenalty + Math.random();
             
             if (score < bestScore) {
               bestScore = score;
@@ -1330,90 +1344,345 @@ export function generateTimetable(
     if (!movedAny) break;
   }
 
-  // 5. Intra-Day Left-Pack Pass (Strictly shift lessons up to Period 1, 2, 3...)
-  for (let shiftIter = 0; shiftIter < 20; shiftIter++) {
-    let shiftedAny = false;
+  // Run comprehensive morning-drain and zero-gap contiguity compaction
+  slots = compactTimetable(slots, classes, subjects, teachers, config);
+
+  return { slots, unassigned, autoAdjustedConfig };
+}
+
+// Helper: generate permutations of small arrays (for <= 5 items)
+function getPermutations<T>(arr: T[]): T[][] {
+  if (arr.length <= 1) return [arr];
+  const result: T[][] = [];
+  for (let i = 0; i < arr.length; i++) {
+    const current = arr[i];
+    const remaining = [...arr.slice(0, i), ...arr.slice(i + 1)];
+    for (const p of getPermutations(remaining)) {
+      result.push([current, ...p]);
+    }
+  }
+  return result;
+}
+
+/**
+ * Compacts timetable so that:
+ * 1. Morning slots are filled first up to configured capacity (excess pushed to afternoon).
+ * 2. Lessons in every session are strictly contiguous starting from period 1 (tiết 1, 2, 3...).
+ * 3. Empty periods are strictly pushed to the end of the day/session (no gaps like 1-3-5).
+ */
+export function compactTimetable(
+  initialSlots: TimetableSlot[],
+  classes: Class[],
+  subjects: Subject[],
+  teachers: Teacher[],
+  config: Config
+): TimetableSlot[] {
+  const slots = initialSlots.map(s => ({ ...s }));
+  const morningLessons = Math.max(1, config.morningLessons || 4);
+  const afternoonLessons = Math.max(0, config.afternoonLessons || 0);
+  const totalPeriods = morningLessons + afternoonLessons;
+
+  // Build state maps
+  const classSchedule: Record<string, Record<number, Record<number, string>>> = {};
+  const teacherSchedule: Record<string, Record<number, Record<number, string>>> = {};
+  const classSubjectDays: Record<string, Record<string, Set<number>>> = {};
+
+  for (const cls of classes) {
+    classSchedule[cls.id] = {};
+    classSubjectDays[cls.id] = {};
+    for (let d = 0; d < config.days; d++) classSchedule[cls.id][d] = {};
+    for (const sub of subjects) classSubjectDays[cls.id][sub.id] = new Set();
+  }
+  for (const t of teachers) {
+    teacherSchedule[t.id] = {};
+    for (let d = 0; d < config.days; d++) teacherSchedule[t.id][d] = {};
+  }
+
+  // Populate from slots
+  for (const s of slots) {
+    if (classSchedule[s.classId]?.[s.day]) {
+      classSchedule[s.classId][s.day][s.period] = s.subjectId;
+    }
+    if (s.teacherId && s.teacherId !== 'none' && teacherSchedule[s.teacherId]?.[s.day]) {
+      teacherSchedule[s.teacherId][s.day][s.period] = s.classId;
+    }
+    if (classSubjectDays[s.classId]?.[s.subjectId]) {
+      classSubjectDays[s.classId][s.subjectId].add(s.day);
+    }
+  }
+
+  const isSchoolOff = (day: number, period: number): boolean => {
+    if (!config.timeOff) return false;
+    const session = period < morningLessons ? 'morning' : 'afternoon';
+    return config.timeOff.some(off => off.day === day && (off.session === 'all' || off.session === session));
+  };
+
+  const isTeacherOff = (teacherId: string, day: number, period: number): boolean => {
+    const teacher = teachers.find(t => t.id === teacherId);
+    if (!teacher || !teacher.timeOff) return false;
+    const session = period < morningLessons ? 'morning' : 'afternoon';
+    return teacher.timeOff.some(off => off.day === day && (off.session === 'all' || off.session === session));
+  };
+
+  const isTeacherBusyForClass = (
+    teacherId: string,
+    day: number,
+    period: number,
+    classId: string,
+    subjectId: string
+  ): boolean => {
+    if (teacherId === 'none') return false;
+    if (isTeacherOff(teacherId, day, period)) return true;
+
+    const activeSlots = slots.filter(s => s.teacherId === teacherId && s.day === day && s.period === period && s.classId !== classId);
+    if (activeSlots.length === 0) return false;
+
+    const cls = classes.find(c => c.id === classId);
+    if (!cls) return true;
+
+    const sub = subjects.find(s => s.id === subjectId);
+    const allowGradeOverlap = sub?.allowGradeOverlap !== false;
+    if (!allowGradeOverlap) return true;
+
+    const hasConflict = activeSlots.some(s => {
+      const otherCls = classes.find(c => c.id === s.classId);
+      return !otherCls || otherCls.grade !== cls.grade || s.subjectId !== subjectId;
+    });
+    if (hasConflict) return true;
+
+    const maxOverlap = sub?.maxOverlapClasses;
+    if (maxOverlap && maxOverlap > 0 && activeSlots.length >= maxOverlap) {
+      return true;
+    }
+    return false;
+  };
+
+  const moveSlot = (s: TimetableSlot, toDay: number, toPeriod: number) => {
+    const fromDay = s.day;
+    const fromPeriod = s.period;
+    const clsId = s.classId;
+    const subId = s.subjectId;
+    const tId = s.teacherId;
+
+    if (classSchedule[clsId]?.[fromDay]) {
+      delete classSchedule[clsId][fromDay][fromPeriod];
+    }
+    if (tId && tId !== 'none' && teacherSchedule[tId]?.[fromDay]) {
+      delete teacherSchedule[tId][fromDay][fromPeriod];
+    }
+    if (fromDay !== toDay) {
+      classSubjectDays[clsId]?.[subId]?.delete(fromDay);
+    }
+
+    if (!classSchedule[clsId]) classSchedule[clsId] = {};
+    if (!classSchedule[clsId][toDay]) classSchedule[clsId][toDay] = {};
+    classSchedule[clsId][toDay][toPeriod] = subId;
+
+    if (tId && tId !== 'none') {
+      if (!teacherSchedule[tId]) teacherSchedule[tId] = {};
+      if (!teacherSchedule[tId][toDay]) teacherSchedule[tId][toDay] = {};
+      teacherSchedule[tId][toDay][toPeriod] = clsId;
+    }
+    if (fromDay !== toDay) {
+      if (!classSubjectDays[clsId]) classSubjectDays[clsId] = {};
+      if (!classSubjectDays[clsId][subId]) classSubjectDays[clsId][subId] = new Set();
+      classSubjectDays[clsId][subId].add(toDay);
+    }
+
+    s.day = toDay;
+    s.period = toPeriod;
+  };
+
+  // PHASE 1: Morning-First Drainage (Push afternoon lessons up to fill all open morning slots)
+  for (let pass = 0; pass < 25; pass++) {
+    let movedAny = false;
     for (const cls of classes) {
-      for (let day = 0; day < config.days; day++) {
+      for (let dM = 0; dM < config.days; dM++) {
+        const limitsM = getDailyPeriodsForClass(cls, dM, config);
+        const morningCapM = Math.min(morningLessons, limitsM.morning);
+
+        for (let pM = 0; pM < morningCapM; pM++) {
+          if (isSchoolOff(dM, pM)) continue;
+          if (classSchedule[cls.id]?.[dM]?.[pM]) continue; // slot already has lesson
+
+          // (dM, pM) is an empty morning slot! Find an afternoon lesson of this class to move up
+          for (let dA = 0; dA < config.days && !classSchedule[cls.id]?.[dM]?.[pM]; dA++) {
+            const limitsA = getDailyPeriodsForClass(cls, dA, config);
+            const aftStart = morningLessons;
+            const aftEnd = morningLessons + limitsA.afternoon;
+
+            for (let pA = aftStart; pA < aftEnd; pA++) {
+              const subId = classSchedule[cls.id]?.[dA]?.[pA];
+              if (!subId) continue;
+
+              const s = slots.find(slot => slot.classId === cls.id && slot.day === dA && slot.period === pA);
+              if (!s || s.isFixed || s.isExam) continue;
+
+              const sub = subjects.find(sb => sb.id === subId);
+              if (sub?.session === 'afternoon') continue; // explicitly requires afternoon
+
+              if (dA !== dM && classSubjectDays[cls.id]?.[subId]?.has(dM)) continue; // avoid duplicate subject on dM
+
+              const tId = s.teacherId;
+              if (tId !== 'none' && isTeacherBusyForClass(tId, dM, pM, cls.id, subId)) continue;
+
+              // Move afternoon lesson to morning!
+              moveSlot(s, dM, pM);
+              movedAny = true;
+              break;
+            }
+          }
+        }
+      }
+    }
+    if (!movedAny) break;
+  }
+
+  // PHASE 2: Strict Zero-Gap Contiguity Compactor (Ensure no mid-session holes, push empty periods to end)
+  for (let packIter = 0; packIter < 10; packIter++) {
+    let changedAny = false;
+
+    for (const cls of classes) {
+      for (let d = 0; d < config.days; d++) {
         for (const isMorning of [true, false]) {
-          const limits = getDailyPeriodsForClass(cls, day, config);
-          const startP = isMorning ? 0 : config.morningLessons;
-          const endP = isMorning 
-            ? Math.min(config.morningLessons, limits.morning) 
-            : config.morningLessons + Math.min(config.afternoonLessons, limits.afternoon);
+          const limits = getDailyPeriodsForClass(cls, d, config);
+          const startP = isMorning ? 0 : morningLessons;
+          const sessionCap = isMorning ? Math.min(morningLessons, limits.morning) : Math.min(afternoonLessons, limits.afternoon);
+          const endP = startP + sessionCap;
 
-          for (let p = startP; p < endP; p++) {
-            if (!classSchedule[cls.id][day][p]) {
-              for (let pNext = p + 1; pNext < endP; pNext++) {
-                if (classSchedule[cls.id][day][pNext]) {
-                  const s = slots.find(slot => slot.classId === cls.id && slot.day === day && slot.period === pNext);
-                  if (!s || s.isExam || s.isFixed) break;
+          const sessionSlots = slots.filter(s => s.classId === cls.id && s.day === d && s.period >= startP && s.period < endP);
+          const K = sessionSlots.length;
+          if (K === 0 || K >= sessionCap) continue;
 
-                  const subId = classSchedule[cls.id][day][pNext];
-                  const tId = s.teacherId;
+          // Check if already contiguous: periods startP, startP + 1, ..., startP + K - 1 must all be occupied
+          let isContiguous = true;
+          for (let p = startP; p < startP + K; p++) {
+            if (!classSchedule[cls.id]?.[d]?.[p]) {
+              isContiguous = false;
+              break;
+            }
+          }
+          if (isContiguous) continue;
 
-                  const isDouble = (pNext + 1 < endP && classSchedule[cls.id][day][pNext + 1] === subId) ||
-                                   (pNext - 1 >= startP && classSchedule[cls.id][day][pNext - 1] === subId);
-
-                  if (!isDouble) {
-                    if (!isSchoolOff(day, p) &&
-                        (tId === 'none' || !isTeacherBusyForClass(tId, day, p, cls.id, subId))) {
-                      
-                      if (teacherSchedule[tId] && teacherSchedule[tId][day] && teacherSchedule[tId][day][pNext] === cls.id) {
-                        delete teacherSchedule[tId][day][pNext];
-                      }
-                      delete classSchedule[cls.id][day][pNext];
-                      
-                      if (tId && tId !== 'none' && teacherSchedule[tId] && teacherSchedule[tId][day]) {
-                        teacherSchedule[tId][day][p] = cls.id;
-                      }
-                      classSchedule[cls.id][day][p] = subId;
-                      s.period = p;
-
-                      shiftedAny = true;
+          // 1. Direct greedy shift
+          for (let p = startP; p < startP + K; p++) {
+            if (!classSchedule[cls.id]?.[d]?.[p]) {
+              for (let pNext = startP + K; pNext < endP; pNext++) {
+                if (classSchedule[cls.id]?.[d]?.[pNext]) {
+                  const sNext = sessionSlots.find(s => s.period === pNext);
+                  if (sNext && !sNext.isFixed && !sNext.isExam) {
+                    if (!isSchoolOff(d, p) && (sNext.teacherId === 'none' || !isTeacherBusyForClass(sNext.teacherId, d, p, cls.id, sNext.subjectId))) {
+                      moveSlot(sNext, d, p);
+                      changedAny = true;
                       break;
-                    }
-                  } else {
-                    const isStartOfDouble = pNext + 1 < endP && classSchedule[cls.id][day][pNext + 1] === subId;
-                    if (isStartOfDouble) {
-                      const s2 = slots.find(slot => slot.classId === cls.id && slot.day === day && slot.period === pNext + 1);
-                      if (s2 && !s2.isExam && !s2.isFixed) {
-                        if (p + 1 < endP && (!classSchedule[cls.id][day][p + 1] || p + 1 === pNext)) {
-                          const t2Id = s2.teacherId;
-                          const canMoveT1 = !isSchoolOff(day, p) && (tId === 'none' || !isTeacherBusyForClass(tId, day, p, cls.id, subId));
-                          const canMoveT2 = !isSchoolOff(day, p + 1) && (t2Id === 'none' || !isTeacherBusyForClass(t2Id, day, p + 1, cls.id, subId));
-
-                          if (canMoveT1 && canMoveT2) {
-                            if (teacherSchedule[tId] && teacherSchedule[tId][day]) delete teacherSchedule[tId][day][pNext];
-                            if (teacherSchedule[t2Id] && teacherSchedule[t2Id][day]) delete teacherSchedule[t2Id][day][pNext + 1];
-                            delete classSchedule[cls.id][day][pNext];
-                            delete classSchedule[cls.id][day][pNext + 1];
-
-                            if (teacherSchedule[tId] && teacherSchedule[tId][day]) teacherSchedule[tId][day][p] = cls.id;
-                            if (teacherSchedule[t2Id] && teacherSchedule[t2Id][day]) teacherSchedule[t2Id][day][p + 1] = cls.id;
-                            classSchedule[cls.id][day][p] = subId;
-                            classSchedule[cls.id][day][p + 1] = subId;
-
-                            s.period = p;
-                            s2.period = p + 1;
-
-                            shiftedAny = true;
-                            break;
-                          }
-                        }
-                      }
                     }
                   }
                 }
               }
             }
           }
+
+          // Re-check
+          isContiguous = true;
+          for (let p = startP; p < startP + K; p++) {
+            if (!classSchedule[cls.id]?.[d]?.[p]) {
+              isContiguous = false;
+              break;
+            }
+          }
+          if (isContiguous) continue;
+
+          // 2. Permutation search for K lessons in session
+          const curSlots = slots.filter(s => s.classId === cls.id && s.day === d && s.period >= startP && s.period < endP);
+          if (curSlots.length === K && K <= 5) {
+            const targetPeriods = Array.from({ length: K }, (_, i) => startP + i);
+            const perms = getPermutations(curSlots);
+
+            for (const perm of perms) {
+              let valid = true;
+              for (let i = 0; i < K; i++) {
+                const s = perm[i];
+                const targetP = targetPeriods[i];
+                if (s.isFixed && s.period !== targetP) { valid = false; break; }
+                if (isSchoolOff(d, targetP)) { valid = false; break; }
+                if (s.teacherId !== 'none') {
+                  const busyOther = slots.some(os => os.teacherId === s.teacherId && os.day === d && os.period === targetP && os.classId !== cls.id);
+                  if (busyOther || isTeacherOff(s.teacherId, d, targetP)) { valid = false; break; }
+                }
+              }
+              if (valid) {
+                // Clear old positions
+                for (const s of curSlots) {
+                  delete classSchedule[cls.id][d][s.period];
+                  if (s.teacherId !== 'none' && teacherSchedule[s.teacherId]?.[d]) {
+                    delete teacherSchedule[s.teacherId][d][s.period];
+                  }
+                }
+                // Set new positions
+                for (let i = 0; i < K; i++) {
+                  const s = perm[i];
+                  const targetP = targetPeriods[i];
+                  s.period = targetP;
+                  classSchedule[cls.id][d][targetP] = s.subjectId;
+                  if (s.teacherId !== 'none') {
+                    if (!teacherSchedule[s.teacherId]) teacherSchedule[s.teacherId] = {};
+                    if (!teacherSchedule[s.teacherId][d]) teacherSchedule[s.teacherId][d] = {};
+                    teacherSchedule[s.teacherId][d][targetP] = cls.id;
+                  }
+                }
+                changedAny = true;
+                break;
+              }
+            }
+          }
+
+          // Re-check
+          isContiguous = true;
+          for (let p = startP; p < startP + K; p++) {
+            if (!classSchedule[cls.id]?.[d]?.[p]) {
+              isContiguous = false;
+              break;
+            }
+          }
+          if (isContiguous) continue;
+
+          // 3. Inter-Day Swaps for persistent gaps
+          for (let p = startP; p < startP + K; p++) {
+            if (!classSchedule[cls.id]?.[d]?.[p]) {
+              for (let pTail = startP + K; pTail < endP; pTail++) {
+                const sTail = slots.find(s => s.classId === cls.id && s.day === d && s.period === pTail);
+                if (!sTail || sTail.isFixed || sTail.isExam) continue;
+
+                for (let d2 = 0; d2 < config.days; d2++) {
+                  if (d2 === d) continue;
+                  const donorSlots = slots.filter(s => s.classId === cls.id && s.day === d2 && s.period >= startP && s.period < endP);
+                  for (const sDonor of donorSlots) {
+                    if (sDonor.isFixed || sDonor.isExam) continue;
+                    if (sDonor.subjectId === sTail.subjectId) continue;
+
+                    const canDonorTake = !isSchoolOff(d, p) && (sDonor.teacherId === 'none' || !isTeacherBusyForClass(sDonor.teacherId, d, p, cls.id, sDonor.subjectId));
+                    const canTailTake = !isSchoolOff(d2, sDonor.period) && (sTail.teacherId === 'none' || !isTeacherBusyForClass(sTail.teacherId, d2, sDonor.period, cls.id, sTail.subjectId));
+
+                    if (canDonorTake && canTailTake) {
+                      moveSlot(sTail, d2, sDonor.period);
+                      moveSlot(sDonor, d, p);
+                      changedAny = true;
+                      break;
+                    }
+                  }
+                  if (classSchedule[cls.id]?.[d]?.[p]) break;
+                }
+                if (classSchedule[cls.id]?.[d]?.[p]) break;
+              }
+            }
+          }
         }
       }
     }
-    if (!shiftedAny) break;
+
+    if (!changedAny) break;
   }
 
-  return { slots, unassigned, autoAdjustedConfig };
+  return slots;
 }
 

@@ -27,9 +27,10 @@ interface Props {
   teachers: Teacher[];
   config: Config;
   onAutoBalanceAndRegenerate?: () => void;
+  onCompactTimetable?: () => void;
 }
 
-export default function ResultTab({ timetable, unassigned, classes, subjects, teachers, config, onAutoBalanceAndRegenerate }: Props) {
+export default function ResultTab({ timetable, unassigned, classes, subjects, teachers, config, onAutoBalanceAndRegenerate, onCompactTimetable }: Props) {
   const [viewMode, setViewModeState] = useState<'class' | 'teacher' | 'master_morning' | 'master_afternoon'>(() => {
     const saved = localStorage.getItem('resultViewMode');
     return (['class', 'teacher', 'master_morning', 'master_afternoon'].includes(saved as any)) ? (saved as any) : 'master_morning';
@@ -350,6 +351,16 @@ export default function ResultTab({ timetable, unassigned, classes, subjects, te
         </div>
         
         <div className="flex items-center gap-2 w-full md:w-auto">
+          {onCompactTimetable && (
+            <button 
+              onClick={onCompactTimetable} 
+              className="btn-secondary flex-grow md:flex-grow-0 flex items-center justify-center gap-2 bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100 hover:border-indigo-300 font-semibold shadow-sm"
+              title="Dồn các tiết sáng cho kín, chuyển tiết thừa sang chiều và dồn liền mạch các tiết không để trống giữa buổi"
+            >
+              <Wand2 className="w-4 h-4 text-indigo-600" />
+              Dồn kín sáng &amp; Liền mạch
+            </button>
+          )}
           <button onClick={() => window.print()} className="btn-secondary flex-grow md:flex-grow-0 flex items-center justify-center gap-2">
             <Printer className="w-4 h-4" />
             In TKB
