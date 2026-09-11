@@ -522,17 +522,17 @@ export default function ResultTab({
                 if (e.target.value === 'class') setSelectedId(classes[0]?.id || '');
                 if (e.target.value === 'teacher') setSelectedId(teachers[0]?.id || '');
               }}
-              className="input-field pl-10 pr-10 appearance-none font-semibold text-slate-700 min-w-[220px]"
+              className="w-full pl-9 pr-8 py-2 bg-white border border-slate-200 rounded-lg text-slate-700 font-serif font-bold text-[15px] outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all appearance-none cursor-pointer shadow-sm min-w-[220px]"
             >
               <option value="master_morning">Toàn trường (Sáng)</option>
               <option value="master_afternoon">Toàn trường (Chiều)</option>
               <option value="class">Xem theo lớp</option>
               <option value="teacher">Xem theo giáo viên</option>
             </select>
-            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
+            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none">
               {viewMode.startsWith('master') ? <LayoutGrid className="w-4 h-4" /> : viewMode === 'class' ? <Users className="w-4 h-4" /> : <User className="w-4 h-4" />}
             </div>
-            <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+            <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
           </div>
           
           {(viewMode === 'class' || viewMode === 'teacher') && (
@@ -540,7 +540,7 @@ export default function ResultTab({
               <select 
                 value={selectedId} 
                 onChange={(e) => setSelectedId(e.target.value)}
-                className="input-field pl-10 pr-10 appearance-none font-semibold text-slate-700 min-w-[200px]"
+                className="w-full pl-9 pr-8 py-2 bg-white border border-slate-200 rounded-lg text-slate-700 font-serif font-bold text-[15px] outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all appearance-none cursor-pointer shadow-sm min-w-[200px]"
               >
                 {viewMode === 'class' 
                   ? classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)
