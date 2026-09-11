@@ -851,10 +851,20 @@ export function generateTimetable(
     teacherSubjects[t.id] = new Set(t.assignments.map(a => a.subjectId));
   }
 
-  const isSchoolOff = (day: number, period: number): boolean => {
+  const isSchoolOff = (day: number, period: number, subjectId?: string): boolean => {
+    if (subjectId) {
+      const sub = subjects.find(s => s.id === subjectId);
+      if (sub?.bannedPeriods?.includes(period) && !config.relaxConstraints) return true;
+    }
     if (!config.timeOff) return false;
     const session = period < config.morningLessons ? 'morning' : 'afternoon';
     return config.timeOff.some(off => off.day === day && (off.session === 'all' || off.session === session));
+  };
+
+  const isPeriodBanned = (subjectId: string, period: number): boolean => {
+    const sub = subjects.find(s => s.id === subjectId);
+    if (!sub || !sub.bannedPeriods || config.relaxConstraints) return false;
+    return sub.bannedPeriods.includes(period);
   };
 
   const isTeacherOff = (teacherId: string, day: number, period: number): boolean => {
@@ -1245,7 +1255,7 @@ export function generateTimetable(
               for (let d = 0; d < config.days; d++) {
                 const dLim = cls ? getDailyPeriodsForClass(cls, d, config) : { morning: config.morningLessons, afternoon: config.afternoonLessons };
                 for (let p = 0; p < dLim.morning; p++) {
-                  if (!isSchoolOff(d, p) && !classSchedule[lesson.classId][d]?.[p]) {
+                  if (!isSchoolOff(d, p, lesson.subjectId) && !classSchedule[lesson.classId][d]?.[p]) {
                     emptyMorningSlots++;
                   }
                 }
@@ -1345,7 +1355,7 @@ export function generateTimetable(
             }
           } else if (!relaxConstraints && result.reason) {
             failureReasons.add(result.reason);
-            if (!isSchoolOff(day, period)) {
+            if (!isSchoolOff(day, period, lesson.subjectId)) {
               openSlotFailureReasons.push(result.reason);
             }
           }
@@ -1418,7 +1428,7 @@ export function generateTimetable(
     for (let d = 0; d < config.days && !resolved; d++) {
       const limits = getDailyPeriodsForClass(cls, d, config);
       for (let p = 0; p < totalPeriods && !resolved; p++) {
-        if (isSchoolOff(d, p)) continue;
+        if (isSchoolOff(d, p, lesson.subjectId)) continue;
 
         const isMorning = p < config.morningLessons;
         if (isMorning && p >= limits.morning) continue;
@@ -1446,7 +1456,7 @@ export function generateTimetable(
 
           const limits2 = getDailyPeriodsForClass(cls, d2, config);
           for (let p2 = 0; p2 < totalPeriods && !resolved; p2++) {
-            if (isSchoolOff(d2, p2)) continue;
+            if (isSchoolOff(d2, p2, lesson.subjectId)) continue;
 
             const isMorning2 = p2 < config.morningLessons;
             if (isMorning2 && p2 >= limits2.morning) continue;
@@ -1498,7 +1508,7 @@ export function generateTimetable(
     for (let d = 0; d < config.days && !placed; d++) {
       const limits = getDailyPeriodsForClass(cls, d, config);
       for (let p = 0; p < totalPeriods && !placed; p++) {
-        if (isSchoolOff(d, p)) continue;
+        if (isSchoolOff(d, p, lesson.subjectId)) continue;
 
         const isMorning = p < config.morningLessons;
         let maxAllowed = isMorning ? limits.morning : limits.afternoon;
@@ -1564,7 +1574,7 @@ export function generateTimetable(
     // Days where afternoon is not school off
     const afternoonCandidateDays: number[] = [];
     for (let d = 0; d < config.days; d++) {
-      if (!isSchoolOff(d, config.morningLessons)) {
+      if (!isSchoolOff(d, config.morningLessons, lesson.subjectId)) {
         afternoonCandidateDays.push(d);
       }
     }
@@ -1591,7 +1601,7 @@ export function generateTimetable(
         while (nextP < aftEnd && classSchedule[cls.id][d]?.[nextP]) {
           nextP++;
         }
-        if (nextP >= aftEnd || isSchoolOff(d, nextP)) continue;
+        if (nextP >= aftEnd || isSchoolOff(d, nextP, lesson.subjectId)) continue;
         
         const p = nextP;
         
@@ -1618,6 +1628,7 @@ export function generateTimetable(
         if (classSubjectDays[cls.id]?.[lesson.subjectId]?.has(d) && !sub?.allowDouble) continue;
 
         for (let pA = aftStart; pA < aftEnd && !placed; pA++) {
+          if (isSchoolOff(d, pA, lesson.subjectId)) continue;
           const sExisting = slots.find(s => s.classId === cls.id && s.day === d && s.period === pA && !s.isFixed && !s.isExam);
           if (!sExisting) continue;
 
@@ -1628,7 +1639,7 @@ export function generateTimetable(
           for (let dM = 0; dM < config.days && !placed; dM++) {
             const limitsM = getDailyPeriodsForClass(cls, dM, config);
             for (let pM = 0; pM < limitsM.morning && !placed; pM++) {
-              if (isSchoolOff(dM, pM) || classSchedule[cls.id][dM]?.[pM]) continue;
+              if (isSchoolOff(dM, pM, sExisting.subjectId) || classSchedule[cls.id][dM]?.[pM]) continue;
               if (dM !== d && classSubjectDays[cls.id]?.[sExisting.subjectId]?.has(dM)) continue;
               if (tExisting && tExisting !== 'none' && isTeacherBusyForClass(tExisting, dM, pM, cls.id, sExisting.subjectId, true)) continue;
 
@@ -1709,7 +1720,7 @@ export function generateTimetable(
                 if (pTarget >= startP + capTarget) continue;
 
                 const tId = sDonor.teacherId;
-                const canMove = !isSchoolOff(dayTarget, pTarget) &&
+                const canMove = !isSchoolOff(dayTarget, pTarget, sDonor.subjectId) &&
                                 (tId === 'none' || !isTeacherBusyForClass(tId, dayTarget, pTarget, cls.id, subId));
 
                 if (canMove) {
@@ -1880,10 +1891,20 @@ export function compactTimetable(
     }
   }
 
-  const isSchoolOff = (day: number, period: number): boolean => {
+  const isSchoolOff = (day: number, period: number, subjectId?: string): boolean => {
+    if (subjectId) {
+      const sub = subjects.find(s => s.id === subjectId);
+      if (sub?.bannedPeriods?.includes(period) && !config.relaxConstraints) return true;
+    }
     if (!config.timeOff) return false;
     const session = period < morningLessons ? 'morning' : 'afternoon';
     return config.timeOff.some(off => off.day === day && (off.session === 'all' || off.session === session));
+  };
+
+  const isPeriodBanned = (subjectId: string, period: number): boolean => {
+    const sub = subjects.find(s => s.id === subjectId);
+    if (!sub || !sub.bannedPeriods || config.relaxConstraints) return false;
+    return sub.bannedPeriods.includes(period);
   };
 
   const isTeacherOff = (teacherId: string, day: number, period: number): boolean => {
@@ -1989,6 +2010,7 @@ export function compactTimetable(
               const sub = subjects.find(sb => sb.id === subId);
               if (sub?.session === 'afternoon') continue;
               if (dA !== dM && classSubjectDays[cls.id]?.[subId]?.has(dM)) continue;
+              if (isSchoolOff(dM, pM, subId)) continue;
 
               const tId = sA.teacherId;
               if (tId !== 'none' && isTeacherBusyForClass(tId, dM, pM, cls.id, subId)) continue;
@@ -2016,7 +2038,8 @@ export function compactTimetable(
                   const subId = sA.subjectId;
                   const sub = subjects.find(sb => sb.id === subId);
                   if (sub?.session === 'afternoon') continue;
-                  if (dA !== dM && classSubjectDays[cls.id]?.[subId]?.has(dM)) continue;
+              if (dA !== dM && classSubjectDays[cls.id]?.[subId]?.has(dM)) continue;
+              if (isSchoolOff(dM, pM, subId)) continue;
 
                   const tA = sA.teacherId;
                   if (tA !== 'none' && isTeacherBusyForClass(tA, dM, pOther, cls.id, subId)) continue;
@@ -2103,7 +2126,7 @@ export function compactTimetable(
               if (classSubjectDays[cls.id]?.[subId]?.has(dTarget)) continue;
 
               for (let pT = morningLessons; pT < morningLessons + aftTarget; pT++) {
-                if (isSchoolOff(dTarget, pT) || classSchedule[cls.id]?.[dTarget]?.[pT]) continue;
+                if (isSchoolOff(dTarget, pT, sDonor.subjectId) || classSchedule[cls.id]?.[dTarget]?.[pT]) continue;
 
                 const tId = sDonor.teacherId;
                 if (tId !== 'none' && isTeacherBusyForClass(tId, dTarget, pT, cls.id, subId)) continue;
@@ -2127,7 +2150,7 @@ export function compactTimetable(
                   if (tOcc !== 'none' && isTeacherBusyForClass(tOcc, dDonor, sDonor.period, cls.id, occSubId)) continue;
 
                   for (let pT = morningLessons; pT < morningLessons + aftTarget; pT++) {
-                    if (isSchoolOff(dTarget, pT)) continue;
+                    if (isSchoolOff(dTarget, pT, sDonor.subjectId)) continue;
                     if (pT !== pOcc && classSchedule[cls.id]?.[dTarget]?.[pT]) continue;
 
                     if (sDonor.teacherId !== 'none' && isTeacherBusyForClass(sDonor.teacherId, dTarget, pT, cls.id, subId)) continue;
@@ -2161,7 +2184,8 @@ export function compactTimetable(
       for (let d = 0; d < config.days; d++) {
         for (const isMorning of [true, false]) {
           const startP = isMorning ? 0 : morningLessons;
-          const sessionSpan = isMorning ? morningLessons : afternoonLessons;
+          const limits = getDailyPeriodsForClass(cls, d, config);
+          const sessionSpan = isMorning ? limits.morning : limits.afternoon;
           if (sessionSpan <= 0) continue;
           const endP = startP + sessionSpan;
 
@@ -2182,7 +2206,7 @@ export function compactTimetable(
               if (classSchedule[cls.id]?.[d]?.[pCand]) {
                 const sCand = slots.find(s => s.classId === cls.id && s.day === d && s.period === pCand);
                 if (sCand && !sCand.isFixed && !sCand.isExam) {
-                  if (!isSchoolOff(d, p) && (sCand.teacherId === 'none' || !isTeacherBusyForClass(sCand.teacherId, d, p, cls.id, sCand.subjectId))) {
+                  if (!isSchoolOff(d, p, sCand.subjectId) && (sCand.teacherId === 'none' || !isTeacherBusyForClass(sCand.teacherId, d, p, cls.id, sCand.subjectId))) {
                     moveSlot(sCand, d, p);
                     changedAny = true;
                     filled = true;
@@ -2204,7 +2228,7 @@ export function compactTimetable(
               const otherSlot = slots.find(os => os.teacherId === tId && os.day === d && os.period === p && os.classId !== cls.id);
               if (otherSlot && !otherSlot.isFixed && !otherSlot.isExam) {
                 const otherClsId = otherSlot.classId;
-                const otherClsFreeAtCand = !classSchedule[otherClsId]?.[d]?.[pCand] && !isSchoolOff(d, pCand);
+                const otherClsFreeAtCand = !classSchedule[otherClsId]?.[d]?.[pCand] && !isSchoolOff(d, pCand, otherSlot.subjectId);
                 if (otherClsFreeAtCand) {
                   moveSlot(otherSlot, d, pCand);
                   moveSlot(sCand, d, p);
@@ -2227,8 +2251,8 @@ export function compactTimetable(
                 const sCand = slots.find(s => s.classId === cls.id && s.day === d && s.period === pCand);
                 if (!sCand || sCand.isFixed || sCand.isExam) continue;
 
-                const canOccTakeP = !isSchoolOff(d, p) && (sOcc.teacherId === 'none' || !isTeacherBusyForClass(sOcc.teacherId, d, p, cls.id, sOcc.subjectId));
-                const canCandTakeOcc = !isSchoolOff(d, pOcc) && (sCand.teacherId === 'none' || !isTeacherBusyForClass(sCand.teacherId, d, pOcc, cls.id, sCand.subjectId));
+                const canOccTakeP = !isSchoolOff(d, p, sOcc.subjectId) && (sOcc.teacherId === 'none' || !isTeacherBusyForClass(sOcc.teacherId, d, p, cls.id, sOcc.subjectId));
+                const canCandTakeOcc = !isSchoolOff(d, pOcc, sCand.subjectId) && (sCand.teacherId === 'none' || !isTeacherBusyForClass(sCand.teacherId, d, pOcc, cls.id, sCand.subjectId));
 
                 if (canOccTakeP && canCandTakeOcc) {
                   moveSlot(sOcc, d, p);
@@ -2262,8 +2286,8 @@ export function compactTimetable(
                 const candCreatesDupOnDonorDay = classSubjectDays[cls.id]?.[sCand.subjectId]?.has(sDonor.day) && !candSub?.allowDouble;
                 if (donorCreatesDupOnD || candCreatesDupOnDonorDay) continue;
 
-                const canDonorTakeP = !isSchoolOff(d, p) && (sDonor.teacherId === 'none' || !isTeacherBusyForClass(sDonor.teacherId, d, p, cls.id, sDonor.subjectId));
-                const canCandTakeDonor = !isSchoolOff(sDonor.day, sDonor.period) && (sCand.teacherId === 'none' || !isTeacherBusyForClass(sCand.teacherId, sDonor.day, sDonor.period, cls.id, sCand.subjectId));
+                const canDonorTakeP = !isSchoolOff(d, p, sDonor.subjectId) && (sDonor.teacherId === 'none' || !isTeacherBusyForClass(sDonor.teacherId, d, p, cls.id, sDonor.subjectId));
+                const canCandTakeDonor = !isSchoolOff(sDonor.day, sDonor.period, sCand.subjectId) && (sCand.teacherId === 'none' || !isTeacherBusyForClass(sCand.teacherId, sDonor.day, sDonor.period, cls.id, sCand.subjectId));
 
                 if (canDonorTakeP && canCandTakeDonor) {
                   moveSlot(sCand, sDonor.day, sDonor.period);
@@ -2296,7 +2320,7 @@ export function compactTimetable(
                   const s = perm[i];
                   const targetP = targetPeriods[i];
                   if (s.isFixed && s.period !== targetP) { valid = false; break; }
-                  if (isSchoolOff(d, targetP)) { valid = false; break; }
+                  if (isSchoolOff(d, targetP, s.subjectId)) { valid = false; break; }
                   if (s.teacherId !== 'none') {
                     if (isTeacherBusyForClass(s.teacherId, d, targetP, cls.id, s.subjectId)) {
                       valid = false;
@@ -2337,17 +2361,22 @@ export function compactTimetable(
     if (!changedAny) break;
   }
 
+  
   // =========================================================================
   // PHASE 3: Guaranteed Strict Contiguity Enforcer (Final Sweep)
   // Ensures 100% that NO class has gaps: every session with K lessons MUST occupy
   // startP ... startP + K - 1. If any tail lesson is still displaced, force it
   // into earlier holes so lessons are strictly contiguous from period 1 downwards.
   // =========================================================================
-  for (const cls of classes) {
-    for (let d = 0; d < config.days; d++) {
+  for (let sweep = 0; sweep < 10; sweep++) {
+    let sweepChanged = false;
+    for (const cls of classes) {
+      for (let d = 0; d < config.days; d++) {
+
       for (const isMorning of [true, false]) {
         const startP = isMorning ? 0 : morningLessons;
-        const sessionSpan = isMorning ? morningLessons : afternoonLessons;
+        const limits = getDailyPeriodsForClass(cls, d, config);
+          const sessionSpan = isMorning ? limits.morning : limits.afternoon;
         if (sessionSpan <= 0) continue;
         const endP = startP + sessionSpan;
 
@@ -2367,8 +2396,10 @@ export function compactTimetable(
             if (!cand) continue;
 
             // 1. Can cand move to p?
-            if (!isSchoolOff(d, p) && (cand.teacherId === 'none' || !isTeacherBusyForClass(cand.teacherId, d, p, cls.id, cand.subjectId))) {
+            if (!isSchoolOff(d, p, cand.subjectId) && (cand.teacherId === 'none' || !isTeacherBusyForClass(cand.teacherId, d, p, cls.id, cand.subjectId))) {
+              
               moveSlot(cand, d, p);
+              sweepChanged = true;
               continue;
             }
 
@@ -2382,18 +2413,40 @@ export function compactTimetable(
               const candCreatesDup = cand.day !== ws.day && classSubjectDays[cls.id]?.[cand.subjectId]?.has(ws.day) && !candSub?.allowDouble;
               if (wsCreatesDup || candCreatesDup) continue;
 
-              const canWsTakeP = !isSchoolOff(d, p) && (ws.teacherId === 'none' || !isTeacherBusyForClass(ws.teacherId, d, p, cls.id, ws.subjectId));
-              const canCandTakeWs = !isSchoolOff(ws.day, ws.period) && (cand.teacherId === 'none' || !isTeacherBusyForClass(cand.teacherId, ws.day, ws.period, cls.id, cand.subjectId));
+              const canWsTakeP = !isSchoolOff(d, p, ws.subjectId) && (ws.teacherId === 'none' || !isTeacherBusyForClass(ws.teacherId, d, p, cls.id, ws.subjectId));
+              const canCandTakeWs = !isSchoolOff(ws.day, ws.period, cand.subjectId) && (cand.teacherId === 'none' || !isTeacherBusyForClass(cand.teacherId, ws.day, ws.period, cls.id, cand.subjectId));
               if (canWsTakeP && canCandTakeWs) {
                 moveSlot(cand, ws.day, ws.period);
                 moveSlot(ws, d, p);
                 weeklySwapDone = true;
+                sweepChanged = true;
                 break;
               }
             }
             if (weeklySwapDone) continue;
 
+            // 2.5 Pull ANY slot from another day to fill the gap without moving cand
+            let pullDone = false;
+            if (K + 1 <= sessionSpan) {
+              const pullCandidates = slots.filter(s => s.classId === cls.id && !s.isFixed && !s.isExam && s.day !== d);
+              for (const ws of pullCandidates) {
+                const wsSub = subjects.find(s => s.id === ws.subjectId);
+                const wsCreatesDup = classSubjectDays[cls.id]?.[ws.subjectId]?.has(d) && !wsSub?.allowDouble;
+                if (wsCreatesDup) continue;
+                
+                const canWsTakeP = !isSchoolOff(d, p, ws.subjectId) && (ws.teacherId === 'none' || !isTeacherBusyForClass(ws.teacherId, d, p, cls.id, ws.subjectId));
+                if (canWsTakeP) {
+                  moveSlot(ws, d, p);
+                  pullDone = true;
+                  sweepChanged = true;
+                  break;
+                }
+              }
+            }
+            if (pullDone) continue;
+
             // 3. Move cand to an open contiguous slot on another day
+
             let movedOtherDay = false;
             for (let d2 = 0; d2 < config.days && !movedOtherDay; d2++) {
               if (d2 === d) continue;
@@ -2402,19 +2455,26 @@ export function compactTimetable(
 
               if (isMorning) {
                 const mCount = slots.filter(s => s.classId === cls.id && s.day === d2 && s.period < morningLessons).length;
-                if (mCount < morningLessons && !isSchoolOff(d2, mCount)) {
+                if (mCount < morningLessons && !isSchoolOff(d2, mCount, cand.subjectId)) {
                   if (cand.teacherId === 'none' || !isTeacherBusyForClass(cand.teacherId, d2, mCount, cls.id, cand.subjectId)) {
+                    
                     moveSlot(cand, d2, mCount);
                     movedOtherDay = true;
+                    sweepChanged = true;
+
                     break;
                   }
                 }
               } else {
                 const aCount = slots.filter(s => s.classId === cls.id && s.day === d2 && s.period >= morningLessons && s.period < totalPeriods).length;
-                if (aCount < afternoonLessons && !isSchoolOff(d2, morningLessons + aCount)) {
+                const d2Limit = getDailyPeriodsForClass(cls, d2, config);
+                if (aCount < d2Limit.afternoon && !isSchoolOff(d2, morningLessons + aCount, cand.subjectId)) {
                   if (cand.teacherId === 'none' || !isTeacherBusyForClass(cand.teacherId, d2, morningLessons + aCount, cls.id, cand.subjectId)) {
+                    
                     moveSlot(cand, d2, morningLessons + aCount);
                     movedOtherDay = true;
+                    sweepChanged = true;
+
                     break;
                   }
                 }
@@ -2422,21 +2482,27 @@ export function compactTimetable(
             }
             if (movedOtherDay) continue;
 
+            
             // 4. Guaranteed Contiguity Override:
             // Shift candidate down to p directly if school is not off and teacher is not busy
-            if (!isSchoolOff(d, p)) {
+            if (!isSchoolOff(d, p, cand.subjectId)) {
               if (cand.teacherId === 'none' || !isTeacherBusyForClass(cand.teacherId, d, p, cls.id, cand.subjectId)) {
                 moveSlot(cand, d, p);
+                sweepChanged = true;
               }
             }
+
+          }
           }
         }
       }
     }
+    if (!sweepChanged) break;
   }
 
   // =========================================================================
   // FINAL SANITY GUARANTEE: Mathematical Zero-Gap Compactor
+
   // For every single class, day, and session, lessons MUST be ordered contiguously
   // starting at startP without skipping any periods.
   // =========================================================================
@@ -2444,7 +2510,8 @@ export function compactTimetable(
     for (let d = 0; d < config.days; d++) {
       for (const isMorning of [true, false]) {
         const startP = isMorning ? 0 : morningLessons;
-        const sessionSpan = isMorning ? morningLessons : afternoonLessons;
+        const limits = getDailyPeriodsForClass(cls, d, config);
+          const sessionSpan = isMorning ? limits.morning : limits.afternoon;
         if (sessionSpan <= 0) continue;
         const endP = startP + sessionSpan;
 
@@ -2550,13 +2617,17 @@ export function pushUnassignedToAfternoon(
     classSubjectDays[slot.classId][slot.subjectId].add(slot.day);
   }
 
-  const isSchoolOff = (d: number, p: number) => {
+  const isSchoolOff = (d: number, p: number, subjectId?: string) => {
+    if (subjectId) {
+      const sub = subjects.find(s => s.id === subjectId);
+      if (sub?.bannedPeriods?.includes(p) && !config.relaxConstraints) return true;
+    }
     if (!config.timeOff) return false;
     const session = p < morningLessons ? 'morning' : 'afternoon';
     return config.timeOff.some(off => off.day === d && (off.session === 'all' || off.session === session));
   };
 
-  const isTeacherBusy = (tId: string, d: number, p: number, cId: string, sId: string) => {
+  const isTeacherBusy = (tId: string, d: number, p: number, cId: string, sId: string, slotArray: TimetableSlot[] = slots) => {
     if (!tId || tId === 'none' || tId === '0') return false;
     if (tId === 't_gvcn') return false; // Sinh hoạt / Chào cờ
     const t = teachers.find(teach => teach.id === tId);
@@ -2565,7 +2636,7 @@ export function pushUnassignedToAfternoon(
       const session = p < morningLessons ? 'morning' : 'afternoon';
       if (t.timeOff.some(to => to.day === d && (to.session === 'all' || to.session === session))) return true;
     }
-    const occSlots = slots.filter(s => s.teacherId === tId && s.day === d && s.period === p && s.classId !== cId);
+    const occSlots = slotArray.filter(s => s.teacherId === tId && s.day === d && s.period === p && s.classId !== cId);
     if (occSlots.length === 0) return false;
 
     const sub = subjects.find(s => s.id === sId);
@@ -2620,7 +2691,7 @@ export function pushUnassignedToAfternoon(
       for (let d = 0; d < config.days; d++) {
         const wholeDayOff = config.timeOff?.some(to => to.day === d && to.session === 'all');
         if (wholeDayOff) continue;
-        if (isSchoolOff(d, morningLessons)) continue;
+        if (isSchoolOff(d, morningLessons, lesson.subjectId)) continue;
         candidateDays.push(d);
       }
 
@@ -2643,14 +2714,16 @@ export function pushUnassignedToAfternoon(
         }
 
         // Calculate next contiguous period
+        const dailyLimit = getDailyPeriodsForClass(cls, d, config);
+        const maxAftPeriods = morningLessons + dailyLimit.afternoon;
         let nextP = morningLessons;
-        while (nextP < totalPeriods && classSchedule[cls.id]?.[d]?.[nextP]) {
+        while (nextP < maxAftPeriods && classSchedule[cls.id]?.[d]?.[nextP]) {
           nextP++;
         }
-        if (nextP >= totalPeriods) continue;
+        if (nextP >= maxAftPeriods) continue;
         
         const p = nextP;
-        if (tId && tId !== 'none' && isTeacherBusy(tId, d, p, cls.id, lesson.subjectId)) continue;
+        if (tId && tId !== 'none' && isTeacherBusy(tId, d, p, cls.id, lesson.subjectId, slots)) continue;
 
           if (!classSchedule[cls.id]) classSchedule[cls.id] = {};
           if (!classSchedule[cls.id][d]) classSchedule[cls.id][d] = {};
@@ -2687,21 +2760,23 @@ export function pushUnassignedToAfternoon(
       if (!placed && pass === 2) {
         for (const d of candidateDays) {
           if (placed) break;
+          const dailyLimit = getDailyPeriodsForClass(cls, d, config);
+          const maxAftPeriods = morningLessons + dailyLimit.afternoon;
 
-          for (let pA = morningLessons; pA < totalPeriods && !placed; pA++) {
+          for (let pA = morningLessons; pA < maxAftPeriods && !placed; pA++) {
             const sExisting = slots.find(s => s.classId === cls.id && s.day === d && s.period === pA && !s.isFixed && !s.isExam);
             if (!sExisting) continue;
 
             const tUnassigned = tId;
-            if (tUnassigned && tUnassigned !== 'none' && isTeacherBusy(tUnassigned, d, pA, cls.id, lesson.subjectId)) continue;
+            if (tUnassigned && tUnassigned !== 'none' && isTeacherBusy(tUnassigned, d, pA, cls.id, lesson.subjectId, slots)) continue;
 
             const tExisting = sExisting.teacherId;
             for (let dM = 0; dM < config.days && !placed; dM++) {
               const limitsM = getDailyPeriodsForClass(cls, dM, config);
               for (let pM = 0; pM < limitsM.morning && !placed; pM++) {
-                if (isSchoolOff(dM, pM) || classSchedule[cls.id]?.[dM]?.[pM]) continue;
+                if (isSchoolOff(dM, pM, sExisting.subjectId) || classSchedule[cls.id]?.[dM]?.[pM]) continue;
                 if (dM !== d && classSubjectDays[cls.id]?.[sExisting.subjectId]?.has(dM)) continue;
-                if (tExisting && tExisting !== 'none' && isTeacherBusy(tExisting, dM, pM, cls.id, sExisting.subjectId)) continue;
+                if (tExisting && tExisting !== 'none' && isTeacherBusy(tExisting, dM, pM, cls.id, sExisting.subjectId, slots)) continue;
 
                 delete classSchedule[cls.id][d][pA];
                 if (tExisting && tExisting !== 'none' && teacherSchedule[tExisting]) {
@@ -2799,20 +2874,36 @@ export function pushUnassignedToAfternoon(
               const targetP = expectedP;
               const s = aftSlots[i];
               
-              const isTeacherBusyAtTarget = isTeacherBusy(s.teacherId, d, targetP, cls.id, s.subjectId);
+              const isTeacherBusyAtTarget = isTeacherBusy(s.teacherId, d, targetP, cls.id, s.subjectId, sList);
 
               // 1. Direct move
-              if (!isSchoolOff(d, targetP) && !isTeacherBusyAtTarget) {
+              if (!isSchoolOff(d, targetP, s.subjectId) && !isTeacherBusyAtTarget) {
                 s.period = targetP;
                 changes = true;
                 break;
               }
 
+              // 1.5. Direct move of another afternoon slot into targetP
+              let movedOther = false;
+              // Removed outer check
+                for (let j = i + 1; j < aftSlots.length; j++) {
+                  const sCand = aftSlots[j];
+                  if (isSchoolOff(d, targetP, sCand.subjectId)) continue;
+                  if (!isTeacherBusy(sCand.teacherId, d, targetP, cls.id, sCand.subjectId, sList)) {
+                    sCand.period = targetP;
+                    changes = true;
+                    movedOther = true;
+                    break;
+                  }
+
+              }
+              if (movedOther) break;
+
               // 2. Cross-class swap with other class occupying targetP
               const otherSlot = sList.find(os => os.teacherId === s.teacherId && os.day === d && os.period === targetP && os.classId !== cls.id);
               if (otherSlot) {
                 const otherClsFreeAtCurrent = !sList.some(os => os.classId === otherSlot.classId && os.day === d && os.period === currentP);
-                if (otherClsFreeAtCurrent && !isSchoolOff(d, currentP)) {
+                if (otherClsFreeAtCurrent && !isSchoolOff(d, currentP, otherSlot.subjectId) && !isSchoolOff(d, targetP, s.subjectId)) {
                   otherSlot.period = currentP;
                   s.period = targetP;
                   changes = true;
@@ -2824,10 +2915,14 @@ export function pushUnassignedToAfternoon(
               let movedToOtherDay = false;
               for (let d2 = 0; d2 < config.days; d2++) {
                 if (d2 === d) continue;
-                if (isSchoolOff(d2, morningLessons)) continue;
-                const d2Aft = sList.filter(os => os.classId === cls.id && os.day === d2 && os.period >= morningLessons);
+                if (isSchoolOff(d2, morningLessons, s.subjectId)) continue;
+                
+                const d2Limit = getDailyPeriodsForClass(cls, d2, config);
+                const maxAftP = morningLessons + d2Limit.afternoon;
+                
+                const d2Aft = sList.filter(os => os.classId === cls.id && os.day === d2 && os.period >= morningLessons).sort((a, b) => a.period - b.period);
                 const nextP = morningLessons + d2Aft.length;
-                if (nextP < morningLessons + 4 && !isSchoolOff(d2, nextP) && !isTeacherBusy(s.teacherId, d2, nextP, cls.id, s.subjectId)) {
+                if (nextP < maxAftP && !isSchoolOff(d2, nextP, s.subjectId) && !isTeacherBusy(s.teacherId, d2, nextP, cls.id, s.subjectId, sList)) {
                   // Check if duplicate on d2
                   const hasSubOnD2 = sList.some(os => os.classId === cls.id && os.day === d2 && os.subjectId === s.subjectId);
                   const sub = subjects.find(sb => sb.id === s.subjectId);
@@ -2841,6 +2936,39 @@ export function pushUnassignedToAfternoon(
                 }
               }
               if (movedToOtherDay) break;
+
+              // 4. Swap with an afternoon slot of this class on another day
+              let swappedWithOtherDay = false;
+              for (let d2 = 0; d2 < config.days; d2++) {
+                if (d2 === d) continue;
+                const d2AftSlots = sList.filter(os => os.classId === cls.id && os.day === d2 && os.period >= morningLessons);
+                for (const os of d2AftSlots) {
+                  const sTeacherBusy = isTeacherBusy(s.teacherId, d2, os.period, cls.id, s.subjectId, sList);
+                  const osTeacherBusy = isTeacherBusy(os.teacherId, d, targetP, cls.id, os.subjectId, sList);
+                  
+                  if (!sTeacherBusy && !osTeacherBusy) {
+                    const d2HasSub = sList.some(x => x.classId === cls.id && x.day === d2 && x.subjectId === s.subjectId && x !== os);
+                    const sSub = subjects.find(sb => sb.id === s.subjectId);
+                    const sDoubleOk = sSub?.allowDouble || !d2HasSub;
+                    
+                    const dHasSub = sList.some(x => x.classId === cls.id && x.day === d && x.subjectId === os.subjectId && x !== s);
+                    const osSub = subjects.find(sb => sb.id === os.subjectId);
+                    const osDoubleOk = osSub?.allowDouble || !dHasSub;
+                    
+                    if (sDoubleOk && osDoubleOk) {
+                      s.day = os.day;
+                      s.period = os.period;
+                      os.day = d;
+                      os.period = targetP;
+                      changes = true;
+                      swappedWithOtherDay = true;
+                      break;
+                    }
+                  }
+                }
+                if (swappedWithOtherDay) break;
+              }
+              if (swappedWithOtherDay) break;
             }
           }
         }
@@ -2849,6 +2977,7 @@ export function pushUnassignedToAfternoon(
   };
 
   eliminateAfternoonGaps(slots);
+  slots = compactTimetable(slots, classes, subjects, teachers, updatedConfig);
 
   return {
     newSlots: slots,
@@ -2875,10 +3004,20 @@ export function pushConflictsAndDuplicatesToOtherDays(
   const afternoonLessons = Math.max(Number(config.afternoonLessons) || 0, 4);
   const totalPeriods = morningLessons + afternoonLessons;
 
-  const isSchoolOff = (d: number, p: number) => {
+  const isSchoolOff = (d: number, p: number, subjectId?: string) => {
+    if (subjectId) {
+      const sub = subjects.find(s => s.id === subjectId);
+      if (sub?.bannedPeriods?.includes(p) && !config.relaxConstraints) return true;
+    }
     if (!config.timeOff) return false;
     const session = p < morningLessons ? 'morning' : 'afternoon';
     return config.timeOff.some(off => off.day === d && (off.session === 'all' || off.session === session));
+  };
+
+  const isPeriodBanned = (subjectId: string, period: number): boolean => {
+    const sub = subjects.find(s => s.id === subjectId);
+    if (!sub || !sub.bannedPeriods || config.relaxConstraints) return false;
+    return sub.bannedPeriods.includes(period);
   };
 
   const isTeacherOff = (tId: string, d: number, p: number) => {
@@ -2985,8 +3124,11 @@ export function pushConflictsAndDuplicatesToOtherDays(
         if (dTargetHasSub && !sub.allowDouble) continue;
 
         // Cách 1: Chuyển trực tiếp vào một tiết trống ở ngày dTarget
-        for (let pTarget = 0; pTarget < totalPeriods; pTarget++) {
-          if (isSchoolOff(dTarget, pTarget)) continue;
+        const limitTarget = getDailyPeriodsForClass(cls, dTarget, config);
+        const maxPTarget = morningLessons + limitTarget.afternoon;
+        for (let pTarget = 0; pTarget < maxPTarget; pTarget++) {
+          if (pTarget < morningLessons && pTarget >= limitTarget.morning) continue;
+          if (isSchoolOff(dTarget, pTarget, s.subjectId)) continue;
           const occ = sList.some(other => other.classId === s.classId && other.day === dTarget && other.period === pTarget);
           if (occ) continue;
 
@@ -3003,8 +3145,15 @@ export function pushConflictsAndDuplicatesToOtherDays(
         if (pushed) break;
 
         // Cách 2: Đổi chéo (Swap 2 chiều) với 1 tiết của lớp ở ngày dTarget
+        // Chỉ đổi với những tiết hợp lệ theo giới hạn ngày của dTarget và s.day
+        const limitS = getDailyPeriodsForClass(cls, s.day, config);
+        const maxPS = morningLessons + limitS.afternoon;
+        
         const dTargetSlots = sList.filter(other => other.classId === s.classId && other.day === dTarget && !other.isFixed && !other.isExam);
         for (const sTarget of dTargetSlots) {
+          if (sTarget.period >= maxPTarget || s.period >= maxPS) continue; // Prevent swapping into invalid out-of-bounds periods
+          if (sTarget.period < morningLessons && sTarget.period >= limitTarget.morning) continue;
+          if (s.period < morningLessons && s.period >= limitS.morning) continue;
           if (sTarget.subjectId === s.subjectId) continue;
           const subTarget = subjects.find(st => st.id === sTarget.subjectId);
 
@@ -3047,7 +3196,7 @@ export function pushConflictsAndDuplicatesToOtherDays(
           if (isTeacherBusy(s.teacherId, dTarget, sTarget.period, s.classId, s.subjectId, temp)) continue;
 
           for (let pFree = 0; pFree < totalPeriods; pFree++) {
-            if (isSchoolOff(s.day, pFree)) continue;
+            if (isSchoolOff(s.day, pFree, sTarget.subjectId)) continue;
             const occ = sList.some(other => other.classId === s.classId && other.day === s.day && other.period === pFree && other !== s);
             if (occ && pFree !== s.period) continue;
             if (isTeacherBusy(sTarget.teacherId, s.day, pFree, s.classId, sTarget.subjectId, temp)) continue;
