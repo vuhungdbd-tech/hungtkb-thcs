@@ -866,7 +866,7 @@ export default function App() {
 
   const handlePushUnassignedToAfternoon = () => {
     const currentWeekData = weeklyTimetables[currentWeek];
-    if (!currentWeekData || !currentWeekData.unassigned || currentWeekData.unassigned.length === 0) return;
+    if (!currentWeekData || !currentWeekData.unassigned || currentWeekData.unassigned.length === 0) return { placedCount: 0, remainingCount: 0 };
     const weekType = currentWeekData.weekType || config.currentWeekType || (currentWeek % 2 === 1 ? 'odd' : 'even');
     const activeConfig: Config = {
       ...config,
@@ -874,7 +874,7 @@ export default function App() {
       currentWeekType: weekType
     };
 
-    const { newSlots, remainingUnassigned } = pushUnassignedToAfternoon(
+    const { newSlots, remainingUnassigned, newConfig, placedCount } = pushUnassignedToAfternoon(
       currentWeekData.timetable || [],
       currentWeekData.unassigned,
       classes,
@@ -883,18 +883,28 @@ export default function App() {
       activeConfig
     );
 
+    const finalConfig: Config = newConfig ? {
+      ...newConfig,
+      currentWeek,
+      currentWeekType: weekType
+    } : activeConfig;
+
+    if (newConfig) {
+      setConfig(finalConfig);
+    }
+
     const updatedWeekly = {
       ...weeklyTimetables,
       [currentWeek]: {
         ...weeklyTimetables[currentWeek],
         timetable: newSlots,
         unassigned: remainingUnassigned,
-        weekType: activeConfig.currentWeekType
+        weekType: finalConfig.currentWeekType
       }
     };
     setWeeklyTimetables(updatedWeekly);
 
-    const dataToSave = { classes, subjects, teachers, config: activeConfig, weeklyTimetables: updatedWeekly, currentWeek };
+    const dataToSave = { classes, subjects, teachers, config: finalConfig, weeklyTimetables: updatedWeekly, currentWeek };
     localStorage.setItem('timetableData', JSON.stringify(dataToSave));
     try {
       localStorage.setItem('timetableData_backup', JSON.stringify(dataToSave));
@@ -910,6 +920,11 @@ export default function App() {
         }).then(() => {}, () => {});
       }
     }
+
+    return {
+      placedCount: placedCount ?? (currentWeekData.unassigned.length - remainingUnassigned.length),
+      remainingCount: remainingUnassigned.length
+    };
   };
 
   const handlePushConflictsToOtherDays = () => {

@@ -30,7 +30,7 @@ interface Props {
   config: Config;
   onAutoBalanceAndRegenerate?: () => void;
   onCompactTimetable?: () => void;
-  onPushUnassignedToAfternoon?: () => void;
+  onPushUnassignedToAfternoon?: () => { placedCount: number; remainingCount: number } | void;
   onPushConflictsToOtherDays?: () => number | void;
 }
 
@@ -57,6 +57,21 @@ export default function ResultTab({
   });
 
   const [notificationMsg, setNotificationMsg] = useState<string | null>(null);
+
+  const handlePushAfternoon = () => {
+    if (!onPushUnassignedToAfternoon) return;
+    const res = onPushUnassignedToAfternoon();
+    if (res && typeof res === 'object') {
+      if (res.placedCount > 0) {
+        setNotificationMsg(`Đã xếp thành công ${res.placedCount} tiết sang buổi chiều!${res.remainingCount > 0 ? ` (Còn lại ${res.remainingCount} tiết)` : ''}`);
+      } else {
+        setNotificationMsg('Không thể xếp thêm vào buổi chiều do các buổi chiều và giáo viên đều đã kín lịch!');
+      }
+      setTimeout(() => {
+        setNotificationMsg(null);
+      }, 5000);
+    }
+  };
 
   const setViewMode = (mode: 'class' | 'teacher' | 'master_morning' | 'master_afternoon') => {
     setViewModeState(mode);
@@ -721,7 +736,7 @@ export default function ResultTab({
               </h3>
               {onPushUnassignedToAfternoon && (
                 <button
-                  onClick={onPushUnassignedToAfternoon}
+                  onClick={handlePushAfternoon}
                   className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer"
                   title="Tự động xếp các tiết bị vướng lịch này sang buổi chiều"
                 >
