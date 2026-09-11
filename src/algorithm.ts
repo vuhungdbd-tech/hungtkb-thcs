@@ -1586,9 +1586,15 @@ export function generateTimetable(
     for (const d of afternoonCandidateDays) {
       if (placed) break;
 
-      for (let p = aftStart; p < aftEnd && !placed; p++) {
-        if (isSchoolOff(d, p) || classSchedule[cls.id][d]?.[p]) continue;
-
+      // Calculate next contiguous period
+        let nextP = aftStart;
+        while (nextP < aftEnd && classSchedule[cls.id][d]?.[nextP]) {
+          nextP++;
+        }
+        if (nextP >= aftEnd || isSchoolOff(d, nextP)) continue;
+        
+        const p = nextP;
+        
         const tId = lesson.teacherId;
         if (tId && tId !== 'none') {
           if (isTeacherBusyForClass(tId, d, p, cls.id, lesson.subjectId, true)) continue;
@@ -1603,7 +1609,6 @@ export function generateTimetable(
         unassigned.splice(u, 1);
         placed = true;
         break;
-      }
     }
 
     // Strategy B: If no free afternoon slot, swap an afternoon lesson of another subject to morning
@@ -2637,9 +2642,15 @@ export function pushUnassignedToAfternoon(
           continue;
         }
 
-        for (let p = morningLessons; p < totalPeriods && !placed; p++) {
-          if (classSchedule[cls.id]?.[d]?.[p]) continue;
-          if (tId && tId !== 'none' && isTeacherBusy(tId, d, p, cls.id, lesson.subjectId)) continue;
+        // Calculate next contiguous period
+        let nextP = morningLessons;
+        while (nextP < totalPeriods && classSchedule[cls.id]?.[d]?.[nextP]) {
+          nextP++;
+        }
+        if (nextP >= totalPeriods) continue;
+        
+        const p = nextP;
+        if (tId && tId !== 'none' && isTeacherBusy(tId, d, p, cls.id, lesson.subjectId)) continue;
 
           if (!classSchedule[cls.id]) classSchedule[cls.id] = {};
           if (!classSchedule[cls.id][d]) classSchedule[cls.id][d] = {};
@@ -2670,7 +2681,6 @@ export function pushUnassignedToAfternoon(
           unassigned.splice(u, 1);
           placed = true;
           break;
-        }
       }
 
       // Strategy B: Swap with a morning slot or an afternoon slot of another subject

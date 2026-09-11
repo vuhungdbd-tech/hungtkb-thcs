@@ -1076,17 +1076,17 @@ export default function App() {
     <div className="min-h-screen bg-page-bg text-text-main font-sans selection:bg-brand-100 selection:text-brand-900">
       {/* Header */}
       <header className="sticky top-0 z-30 w-full bg-white/80 backdrop-blur-md border-b border-border-soft no-print">
-        <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between">
+        <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <div className="w-12 h-12 bg-brand-600 rounded-2xl flex items-center justify-center shadow-lg shadow-brand-500/20">
-              <School className="w-7 h-7 text-white" />
+            <div className="w-10 h-10 bg-brand-600 rounded-xl flex items-center justify-center shadow-lg shadow-brand-500/20">
+              <School className="w-6 h-6 text-white" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="text-2xl font-black tracking-tight text-text-main leading-none">{config.appName}</h1>
+                <h1 className="text-xl font-black tracking-tight text-text-main leading-none">{config.appName}</h1>
                 {isAdmin ? (
                   <span className="bg-amber-100 text-amber-700 text-[10px] font-black px-2 py-0.5 rounded-full border border-amber-200 uppercase tracking-tighter">
-                    Admin Tối Cao
+                    Admin
                   </span>
                 ) : licenseInfo && (
                   <div className="flex items-center gap-1.5">
@@ -1097,18 +1097,18 @@ export default function App() {
                     }`}>
                       {licenseInfo.type === 'trial' ? 'Dùng thử (1 tháng)' : 'Bản quyền (1 năm)'}
                     </span>
-                    <span className="text-[10px] font-bold text-slate-400">
+                    <span className="text-[10px] font-bold text-slate-400 hidden sm:inline">
                       Hết hạn: {new Date(new Date(licenseInfo.used_at).setMonth(new Date(licenseInfo.used_at).getMonth() + (licenseInfo.type === 'trial' ? 1 : 12))).toLocaleDateString('vi-VN')}
                     </span>
                   </div>
                 )}
-                <Settings className="w-5 h-5 text-stone-300 opacity-0 group-hover:opacity-100 transition-opacity" />
+                <Settings className="w-4 h-4 text-stone-300 opacity-0 group-hover:opacity-100 transition-opacity" />
               </div>
-              <div className="flex items-center gap-2 mt-2">
-                <p className="text-sm font-black text-text-muted uppercase tracking-[0.2em]">{config.appSubtitle}</p>
-                <div className="w-1 h-1 bg-stone-300 rounded-full" />
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[10px] font-bold text-brand-600 uppercase tracking-widest">
+              <div className="flex items-center gap-2 mt-1">
+                <p className="text-xs font-black text-text-muted uppercase tracking-[0.2em]">{config.appSubtitle}</p>
+                <div className="w-1 h-1 bg-stone-300 rounded-full hidden sm:block" />
+                <div className="hidden sm:flex items-center gap-1.5">
+                  <span className="text-[9px] font-bold text-brand-600 uppercase tracking-widest">
                     Chào, {session?.user?.user_metadata?.full_name || session?.user?.email || 'Người dùng'}
                   </span>
                   <div className="w-1 h-1 bg-stone-300 rounded-full" />
@@ -1116,7 +1116,7 @@ export default function App() {
                   {syncStatus === 'syncing' && <Loader2 className="w-3.5 h-3.5 text-brand-500 animate-spin" />}
                   {syncStatus === 'offline' && <CloudOff className="w-3.5 h-3.5 text-amber-500" />}
                   {syncStatus === 'error' && <CloudOff className="w-3.5 h-3.5 text-rose-500" />}
-                  <span className={`text-[10px] font-bold uppercase tracking-widest ${
+                  <span className={`text-[9px] font-bold uppercase tracking-widest ${
                     syncStatus === 'synced' ? 'text-emerald-600' : 
                     syncStatus === 'syncing' ? 'text-brand-600' : 
                     syncStatus === 'offline' ? 'text-amber-600' : 'text-rose-600'
@@ -1130,7 +1130,7 @@ export default function App() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2 sm:gap-3">
+          <div className="flex items-center gap-2">
             <input 
               type="file" 
               ref={fileInputRef} 
@@ -1138,8 +1138,8 @@ export default function App() {
               onChange={handleImportBackup} 
               className="hidden" 
             />
-            <div className="flex items-center gap-1.5 bg-slate-100 rounded-xl p-1 no-print">
-              <span className="text-xs font-bold text-slate-500 pl-2">Tuần</span>
+            <div className="flex items-center gap-1.5 bg-slate-100 rounded-lg p-1 no-print">
+              <span className="text-xs font-bold text-slate-500 pl-2 hidden lg:inline">Tuần</span>
               <select 
                 value={currentWeek}
                 onChange={(e) => {
@@ -1148,7 +1148,7 @@ export default function App() {
                   const wType = weeklyTimetables[newW]?.weekType || config.currentWeekType || (newW % 2 === 1 ? 'odd' : 'even');
                   setConfig(prev => ({ ...prev, currentWeek: newW, currentWeekType: wType }));
                 }}
-                className="bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-sm font-bold text-brand-700 outline-none"
+                className="bg-white border border-slate-200 rounded-md px-2 py-1 text-xs font-bold text-brand-700 outline-none"
               >
                 {Array.from({ length: 52 }).map((_, i) => (
                   <option key={i+1} value={i+1}>Tuần {i+1}</option>
@@ -1167,8 +1167,8 @@ export default function App() {
                     }
                   }));
                 }}
-                className="bg-white border border-slate-200 rounded-lg px-2 py-1.5 text-xs font-bold text-slate-700 outline-none"
-                title="Chọn loại tuần (Tuần lẻ, Tuần chẵn, Tuần bổ sung)"
+                className="bg-white border border-slate-200 rounded-md px-2 py-1 text-xs font-bold text-slate-700 outline-none"
+                title="Chọn loại tuần"
               >
                 <option value="odd">Tuần lẻ</option>
                 <option value="even">Tuần chẵn</option>
@@ -1178,45 +1178,44 @@ export default function App() {
             </div>
             <button 
               onClick={() => setShowBackupModal(true)} 
-              title="Sao lưu, xuất tệp JSON hoặc khôi phục dữ liệu thời khóa biểu"
-              className="btn-secondary flex items-center gap-2 py-3 px-3.5 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border-emerald-200 shadow-xs"
+              title="Sao lưu/Phục hồi JSON"
+              className="btn-secondary flex items-center justify-center p-2 lg:px-3 lg:py-2 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border-emerald-200 shadow-xs rounded-lg"
             >
-              <Download className="w-5 h-5 text-emerald-600" />
-              <span className="hidden md:inline font-bold text-xs">Sao lưu / Phục hồi</span>
+              <Download className="w-4 h-4 text-emerald-600" />
+              <span className="hidden lg:inline ml-2 font-bold text-xs">Sao lưu</span>
             </button>
             <button 
               onClick={() => setShowSqlModal(true)} 
-              title="Xem và sao chép mã SQL Supabase để cấp lại quyền & bảng"
-              className="btn-secondary flex items-center gap-2 py-3 px-4 text-brand-700 bg-brand-50 hover:bg-brand-100 border-brand-200 shadow-xs"
+              title="SQL Supabase"
+              className="btn-secondary flex items-center justify-center p-2 lg:px-3 lg:py-2 text-brand-700 bg-brand-50 hover:bg-brand-100 border-brand-200 shadow-xs rounded-lg"
             >
-              <Database className="w-5 h-5 text-brand-600" />
-              <span className="hidden md:inline font-bold text-xs">Mã SQL Supabase</span>
+              <Database className="w-4 h-4 text-brand-600" />
+              <span className="hidden lg:inline ml-2 font-bold text-xs">SQL</span>
             </button>
-            <button onClick={handleSave} className="btn-secondary flex items-center gap-2 py-3 px-5 sm:px-6">
-              <Save className="w-5 h-5 sm:w-6 sm:h-6" />
-              <span className="hidden sm:inline">Lưu & Đồng bộ</span>
+            <button onClick={handleSave} className="btn-secondary flex items-center justify-center p-2 lg:px-3 lg:py-2 rounded-lg" title="Lưu & Đồng bộ">
+              <Save className="w-4 h-4" />
+              <span className="hidden lg:inline ml-2 font-bold text-xs">Lưu</span>
             </button>
-            <button onClick={handleLogout} className="btn-secondary flex items-center gap-2 py-3 px-4 sm:px-6 text-text-muted border-transparent hover:text-rose-600 hover:bg-rose-50">
-              <LogOut className="w-5 h-5 sm:w-6 sm:h-6" />
-              <span className="hidden sm:inline">Đăng xuất</span>
+            <button onClick={handleLogout} className="btn-secondary flex items-center justify-center p-2 lg:px-3 lg:py-2 rounded-lg text-text-muted border-transparent hover:text-rose-600 hover:bg-rose-50" title="Đăng xuất">
+              <LogOut className="w-4 h-4" />
             </button>
-            <div className="w-px h-10 bg-stone-200 mx-1 sm:mx-2" />
+            <div className="w-px h-6 bg-stone-200 mx-1" />
             <label 
-              title="Khi bật: Tự động nới lỏng các ràng buộc trùng tiết (Tiếng Anh, Thể dục...), linh hoạt số tiết các buổi để lấp đầy 100% tiết mà không bị báo lỗi kín tiết"
-              className="flex items-center gap-2 px-3 py-2.5 bg-amber-50/90 hover:bg-amber-100/90 border border-amber-200 text-amber-950 rounded-xl cursor-pointer text-xs font-bold transition-all shadow-2xs select-none"
+              title="Nới lỏng ràng buộc"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 lg:px-3 lg:py-2 bg-amber-50/90 hover:bg-amber-100/90 border border-amber-200 text-amber-950 rounded-lg cursor-pointer text-xs font-bold transition-all shadow-2xs select-none"
             >
               <input
                 type="checkbox"
                 checked={config.relaxConstraints ?? false}
                 onChange={(e) => setConfig({ ...config, relaxConstraints: e.target.checked })}
-                className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 border-amber-300 cursor-pointer"
+                className="w-3.5 h-3.5 rounded text-amber-600 focus:ring-amber-500 border-amber-300 cursor-pointer"
               />
-              <span className="hidden sm:inline whitespace-nowrap">Nới lỏng ràng buộc</span>
-              <span className="sm:hidden whitespace-nowrap">Nới lỏng</span>
+              <span className="hidden xl:inline whitespace-nowrap">Nới lỏng ràng buộc</span>
+              <span className="hidden lg:inline xl:hidden whitespace-nowrap">Nới lỏng</span>
             </label>
-            <button onClick={() => handleGenerate()} className="btn-primary flex items-center gap-2 py-3 px-6 sm:px-8 shadow-brand-500/25">
-              <Play className="w-5 h-5 sm:w-6 sm:h-6 fill-current" />
-              <span>Tạo TKB</span>
+            <button onClick={() => handleGenerate()} className="btn-primary flex items-center gap-1.5 px-3 py-1.5 lg:px-5 lg:py-2 shadow-brand-500/25 rounded-lg">
+              <Play className="w-4 h-4 fill-current" />
+              <span className="font-bold text-xs lg:text-sm">Tạo TKB</span>
             </button>
           </div>
         </div>
