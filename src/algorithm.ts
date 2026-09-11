@@ -2577,6 +2577,17 @@ export function pushUnassignedToAfternoon(
 
   // Pass 1: Standard afternoon days (respect school afternoon off, avoid same-day subject duplicate)
   // Pass 2: Relaxed afternoon days (if school afternoon was off on some days, or subject already had a morning lesson)
+  unassigned.sort((a, b) => {
+    const getPriority = (subId: string) => {
+      if (subId === 's_toan' || subId === 's_van') return 1;
+      const sub = subjects.find(s => s.id === subId);
+      if (sub && (sub.name.toLowerCase().includes('toán') || sub.name.toLowerCase().includes('văn'))) return 1;
+      return 0;
+    };
+    // Items with priority 1 will be moved to the end of the array, so they are processed FIRST in the backwards loop.
+    return getPriority(a.subjectId) - getPriority(b.subjectId);
+  });
+
   for (let pass = 1; pass <= 2; pass++) {
     for (let u = unassigned.length - 1; u >= 0; u--) {
       const lesson = unassigned[u];
@@ -2604,7 +2615,7 @@ export function pushUnassignedToAfternoon(
       for (let d = 0; d < config.days; d++) {
         const wholeDayOff = config.timeOff?.some(to => to.day === d && to.session === 'all');
         if (wholeDayOff) continue;
-        if (pass === 1 && isSchoolOff(d, morningLessons)) continue;
+        if (isSchoolOff(d, morningLessons)) continue;
         candidateDays.push(d);
       }
 
@@ -2761,6 +2772,73 @@ export function pushUnassignedToAfternoon(
   slots = compactTimetable(slots, classes, subjects, teachers, updatedConfig);
   const { newSlots: cleanSlots } = pushConflictsAndDuplicatesToOtherDays(slots, classes, subjects, teachers, updatedConfig);
   slots = cleanSlots;
+
+  const eliminateAfternoonGaps = (sList: TimetableSlot[]) => {
+    let changes = true;
+    let iters = 0;
+    while (changes && iters < 20) {
+      changes = false;
+      iters++;
+      for (const cls of classes) {
+        for (let d = 0; d < config.days; d++) {
+          const aftSlots = sList.filter(s => s.classId === cls.id && s.day === d && s.period >= morningLessons).sort((a, b) => a.period - b.period);
+          for (let i = 0; i < aftSlots.length; i++) {
+            const expectedP = morningLessons + i;
+            if (aftSlots[i].period !== expectedP) {
+              const currentP = aftSlots[i].period;
+              const targetP = expectedP;
+              const s = aftSlots[i];
+              
+              const isTeacherBusyAtTarget = isTeacherBusy(s.teacherId, d, targetP, cls.id, s.subjectId);
+
+              // 1. Direct move
+              if (!isSchoolOff(d, targetP) && !isTeacherBusyAtTarget) {
+                s.period = targetP;
+                changes = true;
+                break;
+              }
+
+              // 2. Cross-class swap with other class occupying targetP
+              const otherSlot = sList.find(os => os.teacherId === s.teacherId && os.day === d && os.period === targetP && os.classId !== cls.id);
+              if (otherSlot) {
+                const otherClsFreeAtCurrent = !sList.some(os => os.classId === otherSlot.classId && os.day === d && os.period === currentP);
+                if (otherClsFreeAtCurrent && !isSchoolOff(d, currentP)) {
+                  otherSlot.period = currentP;
+                  s.period = targetP;
+                  changes = true;
+                  break;
+                }
+              }
+
+              // 3. Move s to another afternoon day with a free contiguous slot
+              let movedToOtherDay = false;
+              for (let d2 = 0; d2 < config.days; d2++) {
+                if (d2 === d) continue;
+                if (isSchoolOff(d2, morningLessons)) continue;
+                const d2Aft = sList.filter(os => os.classId === cls.id && os.day === d2 && os.period >= morningLessons);
+                const nextP = morningLessons + d2Aft.length;
+                if (nextP < morningLessons + 4 && !isSchoolOff(d2, nextP) && !isTeacherBusy(s.teacherId, d2, nextP, cls.id, s.subjectId)) {
+                  // Check if duplicate on d2
+                  const hasSubOnD2 = sList.some(os => os.classId === cls.id && os.day === d2 && os.subjectId === s.subjectId);
+                  const sub = subjects.find(sb => sb.id === s.subjectId);
+                  if (!hasSubOnD2 || sub?.allowDouble) {
+                    s.day = d2;
+                    s.period = nextP;
+                    changes = true;
+                    movedToOtherDay = true;
+                    break;
+                  }
+                }
+              }
+              if (movedToOtherDay) break;
+            }
+          }
+        }
+      }
+    }
+  };
+
+  eliminateAfternoonGaps(slots);
 
   return {
     newSlots: slots,
