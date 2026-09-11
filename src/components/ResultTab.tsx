@@ -17,7 +17,8 @@ import {
   FileSpreadsheet,
   Sparkles,
   Wand2,
-  CheckCircle2
+  CheckCircle2,
+  ArrowRightLeft
 } from 'lucide-react';
 
 interface Props {
@@ -29,9 +30,22 @@ interface Props {
   config: Config;
   onAutoBalanceAndRegenerate?: () => void;
   onCompactTimetable?: () => void;
+  onPushUnassignedToAfternoon?: () => void;
+  onPushConflictsToOtherDays?: () => number | void;
 }
 
-export default function ResultTab({ timetable, unassigned, classes, subjects, teachers, config, onAutoBalanceAndRegenerate, onCompactTimetable }: Props) {
+export default function ResultTab({ 
+  timetable, 
+  unassigned, 
+  classes, 
+  subjects, 
+  teachers, 
+  config, 
+  onAutoBalanceAndRegenerate, 
+  onCompactTimetable, 
+  onPushUnassignedToAfternoon,
+  onPushConflictsToOtherDays
+}: Props) {
   const [viewMode, setViewModeState] = useState<'class' | 'teacher' | 'master_morning' | 'master_afternoon'>(() => {
     const saved = localStorage.getItem('resultViewMode');
     return (['class', 'teacher', 'master_morning', 'master_afternoon'].includes(saved as any)) ? (saved as any) : 'master_morning';
@@ -134,6 +148,63 @@ export default function ResultTab({ timetable, unassigned, classes, subjects, te
     if (onCompactTimetable) {
       onCompactTimetable();
       setNotificationMsg('✅ Đã sắp xếp lại TKB: Loại bỏ các môn 0 tiết & môn chưa phân công giáo viên, dồn các tiết học liền mạch từ tiết 1!');
+      setTimeout(() => setNotificationMsg(null), 5000);
+    }
+  };
+
+  const conflictStats = useMemo(() => {
+    let teacherConflicts = 0;
+    let duplicateSubjects = 0;
+
+    const morningLessons = Math.max(1, Number(config.morningLessons) || 4);
+    const afternoonLessons = Math.max(0, Number(config.afternoonLessons) || 4);
+    const totalPeriods = morningLessons + afternoonLessons;
+
+    // Check teacher conflicts
+    for (const t of teachers) {
+      if (t.id === 't_gvcn') continue;
+      for (let d = 0; d < config.days; d++) {
+        for (let p = 0; p < totalPeriods; p++) {
+          const occ = effectiveTimetable.filter(s => s.teacherId === t.id && s.day === d && s.period === p);
+          if (occ.length > 1) {
+            const cls0 = classes.find(c => c.id === occ[0].classId);
+            const allSameGradeAndSub = occ.every(s => {
+              const c = classes.find(cl => cl.id === s.classId);
+              return c?.grade === cls0?.grade && s.subjectId === occ[0].subjectId;
+            });
+            if (!allSameGradeAndSub) {
+              teacherConflicts += (occ.length - 1);
+            }
+          }
+        }
+      }
+    }
+
+    // Check same-day duplicate subjects
+    for (const c of classes) {
+      for (let d = 0; d < config.days; d++) {
+        for (const sub of subjects) {
+          const occ = effectiveTimetable.filter(s => s.classId === c.id && s.day === d && s.subjectId === sub.id);
+          if (!sub.allowDouble && occ.length > 1) {
+            duplicateSubjects += (occ.length - 1);
+          } else if (sub.allowDouble && occ.length > 2) {
+            duplicateSubjects += (occ.length - 2);
+          }
+        }
+      }
+    }
+
+    return {
+      teacherConflicts,
+      duplicateSubjects,
+      totalIssues: teacherConflicts + duplicateSubjects
+    };
+  }, [effectiveTimetable, teachers, classes, subjects, config]);
+
+  const handlePushConflicts = () => {
+    if (onPushConflictsToOtherDays) {
+      onPushConflictsToOtherDays();
+      setNotificationMsg('✅ Đã tự động đẩy các tiết trùng lịch giáo viên hoặc trùng môn trong ngày sang các ngày khác!');
       setTimeout(() => setNotificationMsg(null), 5000);
     }
   };
@@ -400,6 +471,31 @@ export default function ResultTab({ timetable, unassigned, classes, subjects, te
         </div>
       )}
 
+      {conflictStats.totalIssues > 0 && (
+        <div className="bg-amber-50 border border-amber-300 text-amber-900 p-4 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-sm shadow-sm no-print">
+          <div className="flex items-center gap-2.5">
+            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+            <div>
+              <p className="font-bold">
+                Phát hiện {conflictStats.totalIssues} tiết cần xử lý: {conflictStats.teacherConflicts > 0 ? `${conflictStats.teacherConflicts} tiết trùng lịch giáo viên` : ''} {conflictStats.teacherConflicts > 0 && conflictStats.duplicateSubjects > 0 ? '• ' : ''}{conflictStats.duplicateSubjects > 0 ? `${conflictStats.duplicateSubjects} tiết trùng môn trong ngày` : ''}
+              </p>
+              <p className="text-xs text-amber-800 mt-0.5">
+                Quy tắc: Giáo viên bị trùng lịch hoặc trùng môn trong ngày sẽ được đẩy sang ngày khác.
+              </p>
+            </div>
+          </div>
+          {onPushConflictsToOtherDays && (
+            <button
+              onClick={handlePushConflicts}
+              className="px-4 py-2 bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-700 hover:to-orange-700 text-white rounded-xl text-xs font-bold transition-all shadow-md cursor-pointer flex items-center gap-1.5 shrink-0"
+            >
+              <ArrowRightLeft className="w-4 h-4" />
+              Đẩy trùng lịch / trùng ngày sang ngày khác
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Controls Bar */}
       <div className="glass-card p-4 flex flex-col md:flex-row items-center justify-between gap-4 no-print">
         <div className="flex items-center gap-3 w-full md:w-auto">
@@ -451,6 +547,16 @@ export default function ResultTab({ timetable, unassigned, classes, subjects, te
             >
               <Wand2 className="w-4 h-4 text-indigo-600" />
               Sắp xếp lại &amp; Loại bỏ môn 0 tiết
+            </button>
+          )}
+          {onPushConflictsToOtherDays && (
+            <button 
+              onClick={handlePushConflicts} 
+              className="btn-secondary flex-grow md:flex-grow-0 flex items-center justify-center gap-2 bg-amber-50 border-amber-200 text-amber-800 hover:bg-amber-100 hover:border-amber-300 font-bold shadow-sm transition-all"
+              title="Đẩy các tiết bị trùng lịch giáo viên hoặc trùng môn trong ngày sang ngày khác"
+            >
+              <ArrowRightLeft className="w-4 h-4 text-amber-600" />
+              Đẩy trùng lịch sang ngày khác
             </button>
           )}
           <button onClick={() => window.print()} className="btn-secondary flex-grow md:flex-grow-0 flex items-center justify-center gap-2">
@@ -608,11 +714,21 @@ export default function ResultTab({ timetable, unassigned, classes, subjects, te
 
         {validUnassigned.length > 0 && (
           <div className="bg-white border border-rose-200 rounded-2xl overflow-hidden shadow-sm">
-            <div className="px-6 py-4 bg-rose-50/50 border-b border-rose-200 flex items-center justify-between">
+            <div className="px-6 py-4 bg-rose-50/50 border-b border-rose-200 flex items-center justify-between flex-wrap gap-3">
               <h3 className="font-bold text-rose-900 text-sm flex items-center gap-2">
                 <AlertTriangle className="w-4 h-4 text-rose-600" />
                 Danh sách {validUnassigned.length} tiết chưa thể xếp lịch
               </h3>
+              {onPushUnassignedToAfternoon && (
+                <button
+                  onClick={onPushUnassignedToAfternoon}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer"
+                  title="Tự động xếp các tiết bị vướng lịch này sang buổi chiều"
+                >
+                  <Moon className="w-3.5 h-3.5" />
+                  Đẩy sang buổi chiều
+                </button>
+              )}
             </div>
             <div className="max-h-[250px] overflow-y-auto">
               <table className="w-full text-left border-collapse">

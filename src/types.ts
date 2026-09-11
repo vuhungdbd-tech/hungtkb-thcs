@@ -112,21 +112,28 @@ export interface AppState {
 export function getAssignmentDefaultLessons(
   subject: Subject | undefined,
   grade: number,
-  weekType: 'all' | 'odd' | 'even',
+  weekType: 'all' | 'odd' | 'even' | 'custom',
   config: Config
 ): number {
   if (!subject) return 1;
   if (subject.gradeConfigs && subject.gradeConfigs[grade]) {
     const gConf = subject.gradeConfigs[grade];
+    const effectiveWeekType = (weekType && weekType !== 'all') ? weekType : config?.currentWeekType;
     
-    // If teacher is assigned specifically to odd week
-    if (weekType === 'odd' && gConf.oddWeek !== undefined && gConf.oddWeek !== null) {
+    // If week type is custom (tuần bổ sung)
+    if (effectiveWeekType === 'custom' && gConf.customWeek !== undefined && gConf.customWeek !== null && String(gConf.customWeek).trim() !== '') {
+      const val = parseInt(gConf.customWeek as any);
+      if (!isNaN(val)) return val;
+    }
+
+    // If week type is odd (tuần lẻ)
+    if (effectiveWeekType === 'odd' && gConf.oddWeek !== undefined && gConf.oddWeek !== null && String(gConf.oddWeek).trim() !== '') {
       const val = parseInt(gConf.oddWeek as any);
       if (!isNaN(val)) return val;
     }
     
-    // If teacher is assigned specifically to even week
-    if (weekType === 'even' && gConf.evenWeek !== undefined && gConf.evenWeek !== null) {
+    // If week type is even (tuần chẵn)
+    if (effectiveWeekType === 'even' && gConf.evenWeek !== undefined && gConf.evenWeek !== null && String(gConf.evenWeek).trim() !== '') {
       const val = parseInt(gConf.evenWeek as any);
       if (!isNaN(val)) return val;
     }
@@ -134,7 +141,7 @@ export function getAssignmentDefaultLessons(
     // Otherwise, check current term config
     const currentTerm = config?.currentTerm || 'I';
     const termConfig = currentTerm === 'I' ? gConf.term1 : gConf.term2;
-    if (termConfig !== undefined && termConfig !== null) {
+    if (termConfig !== undefined && termConfig !== null && String(termConfig).trim() !== '') {
       const val = parseInt(termConfig as any);
       if (!isNaN(val)) return val;
     }

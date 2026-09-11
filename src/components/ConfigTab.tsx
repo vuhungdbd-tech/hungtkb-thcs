@@ -1083,9 +1083,18 @@ function DailyPeriodsConfigUI({ config, setConfig, classes, subjects, teachers }
     setConfig({ ...config, gradeDailyPeriods: currentGrades });
   };
 
-  const applyPresetForGrade = (grade: number, preset: 'standard' | 'morning_only' | 'full' | 'school_29_lessons') => {
+  const applyPresetForGrade = (grade: number, preset: 'standard' | 'morning_only' | 'full' | 'school_29_lessons' | 'morning_4_contiguous') => {
     const currentGrades = { ...(config.gradeDailyPeriods || {}) };
     currentGrades[grade] = daysList.map(d => {
+      if (preset === 'morning_4_contiguous') {
+        const isGrade8or9 = grade >= 8;
+        if (d === 0) return { morning: 4, afternoon: 0 };
+        if (d === 1) return { morning: 4, afternoon: 3 };
+        if (d === 2) return { morning: 4, afternoon: isGrade8or9 ? 3 : 2 };
+        if (d === 3) return { morning: 4, afternoon: 2 };
+        if (d === 4) return { morning: 4, afternoon: 2 };
+        return { morning: 0, afternoon: 0 };
+      }
       if (preset === 'morning_only') return { morning: 4, afternoon: 0 };
       if (preset === 'full') return { morning: 4, afternoon: d === 5 ? 0 : 3 };
       if (preset === 'school_29_lessons') {
@@ -1099,10 +1108,19 @@ function DailyPeriodsConfigUI({ config, setConfig, classes, subjects, teachers }
     setConfig({ ...config, gradeDailyPeriods: currentGrades });
   };
 
-  const applyPresetForAllGrades = (preset: 'school_29_lessons' | 'morning_only' | 'standard') => {
+  const applyPresetForAllGrades = (preset: 'school_29_lessons' | 'morning_only' | 'standard' | 'morning_4_contiguous') => {
     const currentGrades = { ...(config.gradeDailyPeriods || {}) };
     grades.forEach(g => {
       currentGrades[g] = daysList.map(d => {
+        if (preset === 'morning_4_contiguous') {
+          const isGrade8or9 = g >= 8;
+          if (d === 0) return { morning: 4, afternoon: 0 };
+          if (d === 1) return { morning: 4, afternoon: 3 };
+          if (d === 2) return { morning: 4, afternoon: isGrade8or9 ? 3 : 2 };
+          if (d === 3) return { morning: 4, afternoon: 2 };
+          if (d === 4) return { morning: 4, afternoon: 2 };
+          return { morning: 0, afternoon: 0 };
+        }
         if (preset === 'school_29_lessons') {
           if (d === 0 || d === 1) return { morning: 4, afternoon: 0 };
           if (d >= 2 && d <= 4) return { morning: 4, afternoon: 3 };
@@ -1112,7 +1130,13 @@ function DailyPeriodsConfigUI({ config, setConfig, classes, subjects, teachers }
         return { morning: 4, afternoon: (d === 0 || d === 2 || d === 4) ? 3 : 0 };
       });
     });
-    setConfig({ ...config, gradeDailyPeriods: currentGrades, morningLessons: 4, afternoonLessons: 3 });
+    setConfig({ 
+      ...config, 
+      gradeDailyPeriods: currentGrades, 
+      classDailyPeriods: {}, // Reset class overrides to ensure uniformity
+      morningLessons: 4, 
+      afternoonLessons: 3 
+    });
   };
 
   const handleAutoOptimizeDailyPeriods = () => {
@@ -1212,6 +1236,25 @@ function DailyPeriodsConfigUI({ config, setConfig, classes, subjects, teachers }
 
       {activeTab === 'grade' && (
         <div className="space-y-6">
+          <div className="p-4 bg-gradient-to-r from-brand-50 to-indigo-50 border border-brand-200 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-sm">
+            <div>
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-5 h-5 text-brand-600 shrink-0" />
+                <h4 className="text-sm font-bold text-brand-900">Mẫu chuẩn: Sáng đủ 4 tiết & Chiều không ngắt quãng</h4>
+              </div>
+              <p className="text-xs text-brand-700 mt-1">
+                Tự động thiết lập buổi sáng cố định 4 tiết (Thứ 2 - Thứ 6) cho toàn trường. Các tiết còn lại phân bổ vào buổi chiều (2-3 tiết/buổi) liền mạch, không có tiết ngắt quãng.
+              </p>
+            </div>
+            <button
+              onClick={() => applyPresetForAllGrades('morning_4_contiguous')}
+              className="px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white text-xs font-bold rounded-xl shadow-md hover:shadow-lg transition-all shrink-0 flex items-center gap-1.5"
+            >
+              <Check className="w-4 h-4" />
+              Áp dụng cho toàn trường
+            </button>
+          </div>
+
           {grades.map(grade => {
             return (
               <div key={grade} className="border border-slate-200 rounded-xl p-4 bg-slate-50/50 space-y-3">
@@ -1224,6 +1267,13 @@ function DailyPeriodsConfigUI({ config, setConfig, classes, subjects, teachers }
                   </div>
                   <div className="flex items-center gap-1.5 text-[11px]">
                     <span className="text-slate-400 font-medium mr-1">Mẫu nhanh:</span>
+                    <button
+                      onClick={() => applyPresetForGrade(grade, 'morning_4_contiguous')}
+                      className="px-2 py-1 bg-brand-50 border border-brand-300 rounded text-brand-700 hover:bg-brand-100 font-bold transition-colors"
+                      title="Sáng 4 tiết đều, chiều 2-3 tiết"
+                    >
+                      Sáng 4 tiết + Chiều
+                    </button>
                     <button
                       onClick={() => applyPresetForGrade(grade, 'morning_only')}
                       className="px-2 py-1 bg-white border border-slate-200 hover:border-brand-300 rounded text-slate-700 hover:text-brand-600 font-medium transition-colors"

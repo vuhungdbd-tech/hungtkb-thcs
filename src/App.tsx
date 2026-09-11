@@ -1,14 +1,14 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { initialClasses, initialSubjects, initialTeachers, initialConfig, initialWeeklyTimetables } from './data';
 import { Class, Subject, Teacher, Config, TimetableSlot } from './types';
-import { generateTimetable, autoOptimizeClassDailyPeriods, compactTimetable, sanitizeWeeklyTimetables, LessonToSchedule } from './algorithm';
+import { generateTimetable, autoOptimizeClassDailyPeriods, compactTimetable, sanitizeWeeklyTimetables, pushUnassignedToAfternoon, pushConflictsAndDuplicatesToOtherDays, LessonToSchedule } from './algorithm';
 import ConfigTab from './components/ConfigTab';
 import ResultTab from './components/ResultTab';
 import LicenseManager from './components/LicenseManager';
 import Login from './components/Login';
-import { Layout, Settings, Calendar, Save, RotateCcw, Play, School, Cloud, CloudOff, Loader2, LogOut, Key, Database, Copy, Check, X, Download, Upload, RefreshCw, AlertCircle } from 'lucide-react';
+import { Layout, Settings, Calendar, Save, RotateCcw, Play, School, Cloud, CloudOff, Loader2, LogOut, Key, Database, Copy, Check, X, Download, Upload, RefreshCw, AlertCircle, ShieldCheck, Globe, Undo2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { supabase } from './lib/supabase';
+import { supabase, testSupabaseHealth, getSupabaseConfig, setCustomSupabaseConfig, resetSupabaseConfig, reloadSupabaseClient } from './lib/supabase';
 
 const SUPABASE_SQL_CODE = `-- ==============================================================================
 -- SUPABASE DATABASE SCHEMA CHO ỨNG DỤNG SẮP XẾP THỜI KHÓA BIỂU
@@ -248,7 +248,13 @@ export default function App() {
   const [showBackupModal, setShowBackupModal] = useState<boolean>(false);
   const [sqlCopied, setSqlCopied] = useState<boolean>(false);
   const [isTestingConnection, setIsTestingConnection] = useState<boolean>(false);
-  const [connectionTestResult, setConnectionTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [connectionTestResult, setConnectionTestResult] = useState<{ success: boolean; message: string; details?: string } | null>(null);
+  
+  // Custom Supabase configuration state
+  const [customSupabaseUrl, setCustomSupabaseUrl] = useState<string>(() => getSupabaseConfig().url);
+  const [customSupabaseKey, setCustomSupabaseKey] = useState<string>(() => getSupabaseConfig().anonKey);
+  const [isCustomConfig, setIsCustomConfig] = useState<boolean>(() => getSupabaseConfig().isCustom);
+  const [configSuccessMsg, setConfigSuccessMsg] = useState<string | null>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   const isInitialLoadDone = React.useRef<boolean>(false);
@@ -273,37 +279,45 @@ export default function App() {
   };
 
   const testSupabaseConnection = async () => {
-    if (!supabase) {
-      setConnectionTestResult({ success: false, message: 'Chưa cấu hình Supabase URL hoặc Anon Key.' });
-      return;
-    }
     setIsTestingConnection(true);
     setConnectionTestResult(null);
     try {
-      const { data, error } = await supabase
-        .from('app_data')
-        .select('id')
-        .limit(1);
-
-      if (error) {
-        setConnectionTestResult({ 
-          success: false, 
-          message: `Lỗi kết nối bảng app_data: ${error.message || error.code || 'Không phản hồi'}. Vui lòng chạy mã SQL bên dưới trên Supabase SQL Editor!` 
-        });
-      } else {
-        setConnectionTestResult({ 
-          success: true, 
-          message: 'Kết nối Supabase & bảng app_data thành công! Dữ liệu sẵn sàng lưu trữ và đồng bộ đám mây.' 
-        });
+      const result = await testSupabaseHealth();
+      setConnectionTestResult(result);
+      if (result.success) {
+        setSyncStatus('synced');
+        setLastSyncTime(new Date().toLocaleTimeString('vi-VN'));
       }
     } catch (err: any) {
       setConnectionTestResult({ 
         success: false, 
-        message: `Không thể kết nối Supabase (${err?.message || 'Mất kết nối mạng'}).` 
+        message: `Không thể kết nối Supabase (${err?.message || 'Mất kết nối mạng'}). Vui lòng kiểm tra lại.` 
       });
     } finally {
       setIsTestingConnection(false);
     }
+  };
+
+  const handleSaveCustomSupabaseConfig = () => {
+    setCustomSupabaseConfig(customSupabaseUrl, customSupabaseKey);
+    reloadSupabaseClient();
+    const updatedCfg = getSupabaseConfig();
+    setIsCustomConfig(updatedCfg.isCustom);
+    setConfigSuccessMsg('Đã lưu cấu hình Supabase! Đang kiểm tra kết nối...');
+    setTimeout(() => setConfigSuccessMsg(null), 3500);
+    testSupabaseConnection();
+  };
+
+  const handleResetSupabaseConfig = () => {
+    resetSupabaseConfig();
+    const updatedCfg = getSupabaseConfig();
+    setCustomSupabaseUrl(updatedCfg.url);
+    setCustomSupabaseKey(updatedCfg.anonKey);
+    setIsCustomConfig(false);
+    reloadSupabaseClient();
+    setConfigSuccessMsg('Đã khôi phục về dự án mặc định.');
+    setTimeout(() => setConfigSuccessMsg(null), 3500);
+    testSupabaseConnection();
   };
 
   const handleExportBackup = () => {
@@ -761,7 +775,7 @@ export default function App() {
   };
 
   const handleGenerate = (customConfig?: Config) => {
-    const weekType = weeklyTimetables[currentWeek]?.weekType || (currentWeek % 2 === 1 ? 'odd' : 'even');
+    const weekType = weeklyTimetables[currentWeek]?.weekType || config.currentWeekType || (currentWeek % 2 === 1 ? 'odd' : 'even');
     const baseConfig = customConfig || config;
     const activeConfig: Config = {
       ...baseConfig,
@@ -777,7 +791,7 @@ export default function App() {
 
     const updatedWeekly = {
       ...weeklyTimetables,
-      [currentWeek]: { timetable: slots, unassigned }
+      [currentWeek]: { timetable: slots, unassigned, weekType: activeConfig.currentWeekType }
     };
     setWeeklyTimetables(updatedWeekly);
     setActiveTab('result');
@@ -801,7 +815,7 @@ export default function App() {
             setSyncStatus('synced');
             setLastSyncTime(new Date().toLocaleTimeString('vi-VN'));
           }
-        }).catch(() => {});
+        }, () => {});
       }
     }
   };
@@ -815,7 +829,7 @@ export default function App() {
   const handleCompactTimetable = () => {
     const currentSlots = weeklyTimetables[currentWeek]?.timetable || [];
     if (currentSlots.length === 0) return;
-    const weekType = weeklyTimetables[currentWeek]?.weekType || (currentWeek % 2 === 1 ? 'odd' : 'even');
+    const weekType = weeklyTimetables[currentWeek]?.weekType || config.currentWeekType || (currentWeek % 2 === 1 ? 'odd' : 'even');
     const activeConfig: Config = {
       ...config,
       currentWeek,
@@ -826,7 +840,8 @@ export default function App() {
       ...weeklyTimetables,
       [currentWeek]: {
         ...weeklyTimetables[currentWeek],
-        timetable: compacted
+        timetable: compacted,
+        weekType: activeConfig.currentWeekType
       }
     };
     setWeeklyTimetables(updatedWeekly);
@@ -844,9 +859,105 @@ export default function App() {
           id: k,
           data: dataToSave,
           updated_at: new Date().toISOString()
-        }).catch(() => {});
+        }).then(() => {}, () => {});
       }
     }
+  };
+
+  const handlePushUnassignedToAfternoon = () => {
+    const currentWeekData = weeklyTimetables[currentWeek];
+    if (!currentWeekData || !currentWeekData.unassigned || currentWeekData.unassigned.length === 0) return;
+    const weekType = currentWeekData.weekType || config.currentWeekType || (currentWeek % 2 === 1 ? 'odd' : 'even');
+    const activeConfig: Config = {
+      ...config,
+      currentWeek,
+      currentWeekType: weekType
+    };
+
+    const { newSlots, remainingUnassigned } = pushUnassignedToAfternoon(
+      currentWeekData.timetable || [],
+      currentWeekData.unassigned,
+      classes,
+      subjects,
+      teachers,
+      activeConfig
+    );
+
+    const updatedWeekly = {
+      ...weeklyTimetables,
+      [currentWeek]: {
+        ...weeklyTimetables[currentWeek],
+        timetable: newSlots,
+        unassigned: remainingUnassigned,
+        weekType: activeConfig.currentWeekType
+      }
+    };
+    setWeeklyTimetables(updatedWeekly);
+
+    const dataToSave = { classes, subjects, teachers, config: activeConfig, weeklyTimetables: updatedWeekly, currentWeek };
+    localStorage.setItem('timetableData', JSON.stringify(dataToSave));
+    try {
+      localStorage.setItem('timetableData_backup', JSON.stringify(dataToSave));
+    } catch {}
+
+    if (session && supabase) {
+      const keysToSync = Array.from(new Set([session.user.id, session.user.email].filter(Boolean)));
+      for (const k of keysToSync) {
+        supabase.from('app_data').upsert({
+          id: k,
+          data: dataToSave,
+          updated_at: new Date().toISOString()
+        }).then(() => {}, () => {});
+      }
+    }
+  };
+
+  const handlePushConflictsToOtherDays = () => {
+    const currentWeekData = weeklyTimetables[currentWeek];
+    if (!currentWeekData || !currentWeekData.timetable || currentWeekData.timetable.length === 0) return 0;
+    const weekType = currentWeekData.weekType || config.currentWeekType || (currentWeek % 2 === 1 ? 'odd' : 'even');
+    const activeConfig: Config = {
+      ...config,
+      currentWeek,
+      currentWeekType: weekType
+    };
+
+    const { newSlots, resolvedCount } = pushConflictsAndDuplicatesToOtherDays(
+      currentWeekData.timetable,
+      classes,
+      subjects,
+      teachers,
+      activeConfig
+    );
+
+    const updatedWeekly = {
+      ...weeklyTimetables,
+      [currentWeek]: {
+        ...weeklyTimetables[currentWeek],
+        timetable: newSlots,
+        weekType: activeConfig.currentWeekType
+      }
+    };
+    setWeeklyTimetables(updatedWeekly);
+
+    const dataToSave = { classes, subjects, teachers, config: activeConfig, weeklyTimetables: updatedWeekly, currentWeek };
+    localStorage.setItem('timetableData', JSON.stringify(dataToSave));
+    try {
+      localStorage.setItem('timetableData_backup', JSON.stringify(dataToSave));
+    } catch {}
+
+    if (session && supabase) {
+      const keysToSync = Array.from(new Set([session.user.id, session.user.email].filter(Boolean)));
+      for (const k of keysToSync) {
+        supabase.from('app_data').upsert({
+          id: k,
+          data: dataToSave,
+          updated_at: new Date().toISOString()
+        }).then(() => {}, () => {});
+      }
+    }
+
+    return resolvedCount;
   };
 
   const handleReset = async () => {
@@ -1012,16 +1123,42 @@ export default function App() {
               onChange={handleImportBackup} 
               className="hidden" 
             />
-            <div className="flex items-center gap-2 bg-slate-100 rounded-xl p-1 no-print">
-              <span className="text-xs font-bold text-slate-500 pl-3">Tuần</span>
+            <div className="flex items-center gap-1.5 bg-slate-100 rounded-xl p-1 no-print">
+              <span className="text-xs font-bold text-slate-500 pl-2">Tuần</span>
               <select 
                 value={currentWeek}
-                onChange={(e) => setCurrentWeek(parseInt(e.target.value))}
-                className="bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm font-bold text-brand-700 outline-none"
+                onChange={(e) => {
+                  const newW = parseInt(e.target.value);
+                  setCurrentWeek(newW);
+                  const wType = weeklyTimetables[newW]?.weekType || config.currentWeekType || (newW % 2 === 1 ? 'odd' : 'even');
+                  setConfig(prev => ({ ...prev, currentWeek: newW, currentWeekType: wType }));
+                }}
+                className="bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-sm font-bold text-brand-700 outline-none"
               >
                 {Array.from({ length: 52 }).map((_, i) => (
                   <option key={i+1} value={i+1}>Tuần {i+1}</option>
                 ))}
+              </select>
+              <select
+                value={weeklyTimetables[currentWeek]?.weekType || config.currentWeekType || (currentWeek % 2 === 1 ? 'odd' : 'even')}
+                onChange={(e) => {
+                  const newType = e.target.value as 'all' | 'odd' | 'even' | 'custom';
+                  setConfig(prev => ({ ...prev, currentWeekType: newType }));
+                  setWeeklyTimetables(prev => ({
+                    ...prev,
+                    [currentWeek]: {
+                      ...(prev[currentWeek] || { timetable: [], unassigned: [] }),
+                      weekType: newType
+                    }
+                  }));
+                }}
+                className="bg-white border border-slate-200 rounded-lg px-2 py-1.5 text-xs font-bold text-slate-700 outline-none"
+                title="Chọn loại tuần (Tuần lẻ, Tuần chẵn, Tuần bổ sung)"
+              >
+                <option value="odd">Tuần lẻ</option>
+                <option value="even">Tuần chẵn</option>
+                <option value="custom">Tuần bổ sung</option>
+                <option value="all">Bình thường</option>
               </select>
             </div>
             <button 
@@ -1144,6 +1281,8 @@ export default function App() {
                 }} 
                 onAutoBalanceAndRegenerate={handleAutoBalanceAndGenerate}
                 onCompactTimetable={handleCompactTimetable}
+                onPushUnassignedToAfternoon={handlePushUnassignedToAfternoon}
+                onPushConflictsToOtherDays={handlePushConflictsToOtherDays}
               />
             ) : (
               <LicenseManager />
@@ -1152,56 +1291,153 @@ export default function App() {
         </AnimatePresence>
       </main>
 
-      {/* SQL Modal */}
+      {/* SQL & Supabase Connection Modal */}
       {showSqlModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[90vh] flex flex-col overflow-hidden border border-slate-200">
-            <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[92vh] flex flex-col overflow-hidden border border-slate-200">
+            <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-brand-100 rounded-xl flex items-center justify-center">
+                <div className="w-10 h-10 bg-brand-100 rounded-xl flex items-center justify-center shrink-0">
                   <Database className="w-5 h-5 text-brand-600" />
                 </div>
                 <div>
-                  <h3 className="text-lg font-bold text-slate-800">Mã SQL Cấp Cơ Sở Dữ Liệu Supabase</h3>
-                  <p className="text-xs text-slate-500 font-medium">Bao gồm bảng app_data, licenses, global_settings & Storage images</p>
+                  <h3 className="text-base font-bold text-slate-800">Kết nối & Cấp quyền Cơ sở Dữ liệu Supabase</h3>
+                  <p className="text-xs text-slate-500 font-medium">Kiểm tra kết nối, cấu hình dự án & sao chép mã SQL bảng app_data</p>
                 </div>
               </div>
               <button 
                 onClick={() => setShowSqlModal(false)}
-                className="p-2 hover:bg-slate-200 rounded-lg text-slate-400 hover:text-slate-600 transition-colors"
+                className="p-2 hover:bg-slate-200 rounded-lg text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="p-6 overflow-y-auto space-y-4">
+            <div className="p-5 overflow-y-auto space-y-4">
               {/* Connection Tester */}
-              <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between">
-                <div>
-                  <h4 className="text-xs font-bold text-slate-800">Kiểm tra kết nối Supabase</h4>
-                  <p className="text-[11px] text-slate-500">Kiểm tra xem bảng app_data trên Supabase đã hoạt động và đọc/ghi được chưa</p>
+              <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h4 className="text-xs font-bold text-slate-800">Kiểm tra trạng thái kết nối</h4>
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                        isCustomConfig 
+                          ? 'bg-amber-50 text-amber-700 border-amber-200' 
+                          : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                      }`}>
+                        {isCustomConfig ? 'Dự án tùy chỉnh' : 'Dự án mặc định'}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-0.5 font-mono truncate max-w-md">
+                      {customSupabaseUrl || 'https://mqvxqmpsclimxhxaoigw.supabase.co'}
+                    </p>
+                  </div>
+                  <button
+                    onClick={testSupabaseConnection}
+                    disabled={isTestingConnection}
+                    className="flex items-center justify-center gap-1.5 px-4 py-2 bg-brand-600 text-white rounded-lg text-xs font-bold hover:bg-brand-700 disabled:opacity-50 transition-colors shadow-xs cursor-pointer shrink-0"
+                  >
+                    {isTestingConnection ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                    <span>{isTestingConnection ? 'Đang kiểm tra...' : 'Kiểm tra kết nối ngay'}</span>
+                  </button>
                 </div>
-                <button
-                  onClick={testSupabaseConnection}
-                  disabled={isTestingConnection}
-                  className="flex items-center gap-1.5 px-3.5 py-2 bg-brand-600 text-white rounded-lg text-xs font-bold hover:bg-brand-700 disabled:opacity-50 transition-colors shadow-xs cursor-pointer"
-                >
-                  {isTestingConnection ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                  <span>{isTestingConnection ? 'Đang kiểm tra...' : 'Kiểm tra ngay'}</span>
-                </button>
+
+                <div className="flex items-center gap-2 pt-1 text-[11px] text-slate-500 bg-white/70 p-2 rounded-lg border border-slate-200/60">
+                  <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>Hệ thống tích hợp <strong>Bộ chuyển tiếp Proxy nội bộ</strong> tự động vượt qua chặn mạng của các nhà mạng (VNPT/Viettel) hoặc tiện ích chặn quảng cáo.</span>
+                </div>
               </div>
 
               {connectionTestResult && (
-                <div className={`p-3.5 rounded-xl text-xs font-semibold flex items-center gap-2 border ${
+                <div className={`p-4 rounded-xl text-xs font-medium flex items-start gap-3 border ${
                   connectionTestResult.success 
-                    ? 'bg-emerald-50 text-emerald-800 border-emerald-200' 
-                    : 'bg-rose-50 text-rose-800 border-rose-200'
+                    ? 'bg-emerald-50 text-emerald-900 border-emerald-200' 
+                    : 'bg-rose-50 text-rose-900 border-rose-200'
                 }`}>
-                  {connectionTestResult.success ? <Check className="w-4 h-4 text-emerald-600 shrink-0" /> : <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />}
-                  <span>{connectionTestResult.message}</span>
+                  {connectionTestResult.success ? (
+                    <Check className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                  ) : (
+                    <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                  )}
+                  <div className="space-y-1.5 flex-1">
+                    <p className="font-bold text-sm leading-snug">{connectionTestResult.message}</p>
+                    {connectionTestResult.details && (
+                      <p className="text-[11px] opacity-90 font-mono leading-relaxed">{connectionTestResult.details}</p>
+                    )}
+                    {!connectionTestResult.success && (
+                      <div className="pt-2 flex flex-wrap gap-2">
+                        <button
+                          onClick={handleResetSupabaseConfig}
+                          className="px-3.5 py-1.5 bg-rose-600 text-white hover:bg-rose-700 rounded-lg text-xs font-bold transition-colors shadow-xs flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Undo2 className="w-4 h-4" />
+                          <span>Khôi phục về Dự án Mặc định (Đang hoạt động 100%)</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
 
+              {configSuccessMsg && (
+                <div className="p-3 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-bold flex items-center gap-2">
+                  <Check className="w-4 h-4 text-emerald-600" />
+                  <span>{configSuccessMsg}</span>
+                </div>
+              )}
+
+              {/* Custom Supabase Project Config */}
+              <div className="p-4 bg-slate-50/80 border border-slate-200 rounded-xl space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                    <Globe className="w-4 h-4 text-brand-600" />
+                    Cấu hình Dự án Supabase (Tùy chọn)
+                  </span>
+                  {isCustomConfig && (
+                    <button
+                      onClick={handleResetSupabaseConfig}
+                      className="text-[11px] font-bold text-rose-600 hover:text-rose-700 hover:underline flex items-center gap-1 cursor-pointer"
+                    >
+                      <Undo2 className="w-3.5 h-3.5" />
+                      Khôi phục mặc định
+                    </button>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 mb-1">Supabase Project URL</label>
+                    <input
+                      type="text"
+                      value={customSupabaseUrl}
+                      onChange={(e) => setCustomSupabaseUrl(e.target.value)}
+                      placeholder="https://xxxxxx.supabase.co"
+                      className="w-full text-xs px-3 py-2 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 mb-1">Supabase Anon Key</label>
+                    <input
+                      type="password"
+                      value={customSupabaseKey}
+                      onChange={(e) => setCustomSupabaseKey(e.target.value)}
+                      placeholder="eyJhbGciOiJIUzI1NiIsIn..."
+                      className="w-full text-xs px-3 py-2 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-1">
+                  <button
+                    onClick={handleSaveCustomSupabaseConfig}
+                    className="px-3.5 py-1.5 bg-slate-800 text-white rounded-lg text-xs font-bold hover:bg-slate-900 transition-colors cursor-pointer"
+                  >
+                    Lưu cấu hình này
+                  </button>
+                </div>
+              </div>
+
+              {/* Instructions */}
               <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-900 leading-relaxed space-y-1">
                 <p className="font-bold text-sm text-blue-950 mb-1">Hướng dẫn cài đặt trên Supabase:</p>
                 <p>1. Đăng nhập vào <strong>dashboard.supabase.com</strong> và chọn dự án của bạn.</p>
@@ -1210,6 +1446,7 @@ export default function App() {
                 <p>4. Sau khi chạy xong, toàn bộ dữ liệu thiết lập sẽ tự động lưu và đồng bộ hai chiều trực tuyến.</p>
               </div>
 
+              {/* SQL Code Viewer */}
               <div className="relative">
                 <div className="flex items-center justify-between pb-2">
                   <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Mã SQL hoàn chỉnh:</span>
@@ -1229,7 +1466,7 @@ export default function App() {
                     </button>
                   </div>
                 </div>
-                <pre className="p-4 bg-slate-900 text-slate-200 rounded-xl text-xs font-mono overflow-x-auto max-h-80 select-all leading-relaxed">
+                <pre className="p-4 bg-slate-900 text-slate-200 rounded-xl text-xs font-mono overflow-x-auto max-h-72 select-all leading-relaxed">
                   {SUPABASE_SQL_CODE}
                 </pre>
               </div>

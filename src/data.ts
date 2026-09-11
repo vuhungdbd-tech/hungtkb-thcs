@@ -63,6 +63,40 @@ export const initialConfig: Config = {
     "8": "C",
     "9": "D"
   },
+  "gradeDailyPeriods": {
+    "6": [
+      { "morning": 4, "afternoon": 0 },
+      { "morning": 4, "afternoon": 3 },
+      { "morning": 4, "afternoon": 2 },
+      { "morning": 4, "afternoon": 2 },
+      { "morning": 4, "afternoon": 2 },
+      { "morning": 0, "afternoon": 0 }
+    ],
+    "7": [
+      { "morning": 4, "afternoon": 0 },
+      { "morning": 4, "afternoon": 3 },
+      { "morning": 4, "afternoon": 2 },
+      { "morning": 4, "afternoon": 2 },
+      { "morning": 4, "afternoon": 2 },
+      { "morning": 0, "afternoon": 0 }
+    ],
+    "8": [
+      { "morning": 4, "afternoon": 0 },
+      { "morning": 4, "afternoon": 3 },
+      { "morning": 4, "afternoon": 3 },
+      { "morning": 4, "afternoon": 2 },
+      { "morning": 4, "afternoon": 2 },
+      { "morning": 0, "afternoon": 0 }
+    ],
+    "9": [
+      { "morning": 4, "afternoon": 0 },
+      { "morning": 4, "afternoon": 3 },
+      { "morning": 4, "afternoon": 3 },
+      { "morning": 4, "afternoon": 3 },
+      { "morning": 4, "afternoon": 1 },
+      { "morning": 0, "afternoon": 0 }
+    ]
+  },
   "classDailyPeriods": {
     "c_6a9": [
       {
