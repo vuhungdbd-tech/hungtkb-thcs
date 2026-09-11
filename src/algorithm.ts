@@ -795,6 +795,9 @@ export function generateTimetable(
 
     const hasConflict = activeSlots.some(s => {
       const otherCls = classes.find(c => c.id === s.classId);
+      if (relaxConstraints) {
+        return s.subjectId !== subjectId && s.subjectId !== 's_hdtn';
+      }
       return !otherCls || otherCls.grade !== cls.grade || s.subjectId !== subjectId;
     });
 
@@ -1690,6 +1693,9 @@ export function compactTimetable(
 
     const hasConflict = activeSlots.some(s => {
       const otherCls = classes.find(c => c.id === s.classId);
+      if (config.relaxConstraints) {
+        return s.subjectId !== subjectId && s.subjectId !== 's_hdtn';
+      }
       return !otherCls || otherCls.grade !== cls.grade || s.subjectId !== subjectId;
     });
     if (hasConflict) return true;

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { initialClasses, initialSubjects, initialTeachers, initialConfig } from './data';
+import { initialClasses, initialSubjects, initialTeachers, initialConfig, initialWeeklyTimetables } from './data';
 import { Class, Subject, Teacher, Config, TimetableSlot } from './types';
 import { generateTimetable, autoOptimizeClassDailyPeriods, compactTimetable, sanitizeWeeklyTimetables, LessonToSchedule } from './algorithm';
 import ConfigTab from './components/ConfigTab';
@@ -150,13 +150,23 @@ export default function App() {
     localStorage.setItem('activeTab', tab);
   };
 
+  // Check if saved data in localStorage was from the old template
+  const isOldTemplateData = (parsed: any): boolean => {
+    if (!parsed || !Array.isArray(parsed.classes) || parsed.classes.length === 0) return true;
+    const hasOldId = parsed.classes.some((c: any) => c.id === 'c1' || c.name === '6A1');
+    const hasNewClass = parsed.classes.some((c: any) => c.name === '6A9');
+    return hasOldId || !hasNewClass;
+  };
+
   // Synchronously initialize all data from localStorage if available to prevent any delay/flicker
   const [classes, setClasses] = useState<Class[]>(() => {
     try {
       const saved = localStorage.getItem('timetableData');
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed.classes) && parsed.classes.length > 0) return parsed.classes;
+        if (!isOldTemplateData(parsed) && Array.isArray(parsed.classes) && parsed.classes.length > 0) {
+          return parsed.classes;
+        }
       }
     } catch {}
     return initialClasses;
@@ -167,7 +177,9 @@ export default function App() {
       const saved = localStorage.getItem('timetableData');
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed.subjects) && parsed.subjects.length > 0) return parsed.subjects;
+        if (!isOldTemplateData(parsed) && Array.isArray(parsed.subjects) && parsed.subjects.length > 0) {
+          return parsed.subjects;
+        }
       }
     } catch {}
     return initialSubjects;
@@ -178,7 +190,9 @@ export default function App() {
       const saved = localStorage.getItem('timetableData');
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed.teachers) && parsed.teachers.length > 0) return parsed.teachers;
+        if (!isOldTemplateData(parsed) && Array.isArray(parsed.teachers) && parsed.teachers.length > 0) {
+          return parsed.teachers;
+        }
       }
     } catch {}
     return initialTeachers;
@@ -189,7 +203,9 @@ export default function App() {
       const saved = localStorage.getItem('timetableData');
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (parsed.config) return { ...initialConfig, ...parsed.config };
+        if (!isOldTemplateData(parsed) && parsed.config) {
+          return { ...initialConfig, ...parsed.config };
+        }
       }
     } catch {}
     return initialConfig;
@@ -211,17 +227,19 @@ export default function App() {
       const saved = localStorage.getItem('timetableData');
       if (saved) {
         const parsed = JSON.parse(saved);
-        const rawWeekly = parsed.weeklyTimetables || (parsed.timetable ? { 1: { timetable: parsed.timetable, unassigned: parsed.unassigned || [] } } : null);
-        if (rawWeekly) {
-          const lClasses = Array.isArray(parsed.classes) && parsed.classes.length > 0 ? parsed.classes : initialClasses;
-          const lSubjects = Array.isArray(parsed.subjects) && parsed.subjects.length > 0 ? parsed.subjects : initialSubjects;
-          const lTeachers = Array.isArray(parsed.teachers) && parsed.teachers.length > 0 ? parsed.teachers : initialTeachers;
-          const lConfig = parsed.config ? { ...initialConfig, ...parsed.config } : initialConfig;
-          return sanitizeWeeklyTimetables(rawWeekly, lClasses, lSubjects, lTeachers, lConfig);
+        if (!isOldTemplateData(parsed)) {
+          const rawWeekly = parsed.weeklyTimetables || (parsed.timetable ? { 1: { timetable: parsed.timetable, unassigned: parsed.unassigned || [] } } : null);
+          if (rawWeekly && Object.keys(rawWeekly).length > 0 && rawWeekly[1]?.timetable?.length > 0) {
+            const lClasses = Array.isArray(parsed.classes) && parsed.classes.length > 0 ? parsed.classes : initialClasses;
+            const lSubjects = Array.isArray(parsed.subjects) && parsed.subjects.length > 0 ? parsed.subjects : initialSubjects;
+            const lTeachers = Array.isArray(parsed.teachers) && parsed.teachers.length > 0 ? parsed.teachers : initialTeachers;
+            const lConfig = parsed.config ? { ...initialConfig, ...parsed.config } : initialConfig;
+            return sanitizeWeeklyTimetables(rawWeekly, lClasses, lSubjects, lTeachers, lConfig);
+          }
         }
       }
     } catch {}
-    return {};
+    return initialWeeklyTimetables;
   });
 
   const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'error' | 'offline'>('offline');
@@ -837,7 +855,7 @@ export default function App() {
       setSubjects(initialSubjects);
       setTeachers(initialTeachers);
       setConfig(initialConfig);
-      setWeeklyTimetables({});
+      setWeeklyTimetables(initialWeeklyTimetables);
       setCurrentWeek(1);
       localStorage.removeItem('timetableData');
       
